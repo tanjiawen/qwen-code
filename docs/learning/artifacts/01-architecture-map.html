@@ -1,0 +1,188 @@
+<meta charset="UTF-8">
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e4e4e7; padding: 24px; line-height: 1.6; }
+h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
+.subtitle { color: #a1a1aa; margin-bottom: 24px; font-size: 0.9rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 32px; }
+.card { background: #1a1b23; border: 1px solid #2e2f3a; border-radius: 12px; padding: 20px; transition: all 0.2s; cursor: pointer; }
+.card:hover { border-color: #6366f1; transform: translateY(-2px); box-shadow: 0 4px 20px rgba(99,102,241,0.15); }
+.card.expanded .details { display: block; }
+.card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.card-icon { width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0; }
+.card-title { font-weight: 600; font-size: 1rem; }
+.card-path { font-size: 0.75rem; color: #71717a; font-family: monospace; }
+.card-desc { font-size: 0.85rem; color: #a1a1aa; margin-top: 8px; }
+.details { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #2e2f3a; font-size: 0.8rem; color: #d4d4d8; }
+.details ul { padding-left: 16px; }
+.details li { margin: 4px 0; }
+.details code { background: #27272a; padding: 1px 5px; border-radius: 3px; font-size: 0.75rem; color: #a78bfa; }
+.section-title { font-size: 1.1rem; font-weight: 600; margin: 32px 0 16px; color: #fff; display: flex; align-items: center; gap: 8px; }
+.dep-graph { background: #1a1b23; border: 1px solid #2e2f3a; border-radius: 12px; padding: 24px; overflow-x: auto; }
+.dep-graph pre { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.8rem; line-height: 1.8; color: #d4d4d8; }
+.dep-graph .highlight { color: #6366f1; font-weight: 600; }
+.dep-graph .secondary { color: #22c55e; }
+.dep-graph .tertiary { color: #f59e0b; }
+.legend { display: flex; gap: 24px; margin-top: 16px; font-size: 0.8rem; }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 24px 0; }
+.stat { background: #1a1b23; border: 1px solid #2e2f3a; border-radius: 8px; padding: 16px; text-align: center; }
+.stat-value { font-size: 1.5rem; font-weight: 700; color: #6366f1; }
+.stat-label { font-size: 0.75rem; color: #71717a; margin-top: 4px; }
+</style>
+
+<h1>🏗️ 千问 Code — 项目全景架构图</h1>
+<p class="subtitle">npm workspaces monorepo · v0.21.0 · Node.js ≥ 22 · TypeScript ESM · 点击卡片展开详情</p>
+
+<div class="stats">
+  <div class="stat"><div class="stat-value">17</div><div class="stat-label">子包 (packages)</div></div>
+  <div class="stat"><div class="stat-value">~2000</div><div class="stat-label">npm 依赖</div></div>
+  <div class="stat"><div class="stat-value">189</div><div class="stat-label">设计文档</div></div>
+  <div class="stat"><div class="stat-value">7</div><div class="stat-label">IM 渠道</div></div>
+  <div class="stat"><div class="stat-value">3</div><div class="stat-label">SDK 语言</div></div>
+</div>
+
+<div class="section-title">📦 核心包</div>
+<div class="grid">
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-header">
+      <div class="card-icon" style="background:#312e81;">🧠</div>
+      <div><div class="card-title">@qwen-code/qwen-code-core</div><div class="card-path">packages/core/</div></div>
+    </div>
+    <div class="card-desc">Agent 引擎 — 与 UI 无关的纯逻辑。LLM 调用、工具系统、权限、MCP、Memory、子Agent。</div>
+    <div class="details">
+      <ul>
+        <li><code>src/core/</code> — Agent 主循环 (client.ts, geminiChat.ts, turn.ts)</li>
+        <li><code>src/tools/</code> — 工具定义与注册</li>
+        <li><code>src/permissions/</code> — 权限模型</li>
+        <li><code>src/providers/</code> — LLM 提供商适配</li>
+        <li><code>src/memory/</code> — 持久化记忆</li>
+        <li><code>src/mcp/</code> — MCP 协议集成</li>
+        <li><code>src/subagents/</code> — 子 Agent 调度</li>
+        <li><code>src/hooks/</code> — 生命周期钩子</li>
+        <li><code>src/config/</code> — Config 配置中心</li>
+        <li><code>src/services/</code> — 后台服务 (压缩、循环检测等)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-header">
+      <div class="card-icon" style="background:#1e3a5f;">🖥️</div>
+      <div><div class="card-title">@qwen-code/qwen-code (CLI)</div><div class="card-path">packages/cli/</div></div>
+    </div>
+    <div class="card-desc">终端交互层 — React 19 + Ink 7 渲染 TUI，yargs 解析命令，会话管理，非交互模式。</div>
+    <div class="details">
+      <ul>
+        <li><code>src/cli.ts</code> — CLI 入口路由 (serve/mcp/help/default)</li>
+        <li><code>src/gemini.tsx</code> — main() 启动序列 (1330行)</li>
+        <li><code>src/ui/</code> — Ink 组件 (AppContainer, 主题, 对话框)</li>
+        <li><code>src/config/</code> — settings.ts, auth.ts, hot-reload.ts</li>
+        <li><code>src/commands/</code> — 子命令 (mcp, extensions, sessions)</li>
+        <li><code>src/nonInteractive/</code> — 非交互模式执行器</li>
+        <li><code>src/serve/</code> — HTTP daemon 模式</li>
+        <li><code>src/i18n/</code> — 国际化</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section-title">🔌 扩展包</div>
+<div class="grid">
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-header">
+      <div class="card-icon" style="background:#14532d;">📡</div>
+      <div><div class="card-title">Channels (IM 机器人)</div><div class="card-path">packages/channels/</div></div>
+    </div>
+    <div class="card-desc">7 个 IM 渠道适配：Telegram、钉钉、微信、飞书、企微、QQ、GitHub。</div>
+    <div class="details">
+      <ul>
+        <li><code>base/</code> — 渠道基础抽象</li>
+        <li><code>telegram/</code> · <code>dingtalk/</code> · <code>weixin/</code></li>
+        <li><code>feishu/</code> · <code>wecom/</code> · <code>qqbot/</code> · <code>github/</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-header">
+      <div class="card-icon" style="background:#7c2d12;">📚</div>
+      <div><div class="card-title">SDKs</div><div class="card-path">packages/sdk-*</div></div>
+    </div>
+    <div class="card-desc">三语言 SDK：TypeScript、Python、Java。供外部程序调用千问 Code。</div>
+    <div class="details">
+      <ul>
+        <li><code>sdk-typescript/</code> — TS SDK (stream-json 协议)</li>
+        <li><code>sdk-python/</code> — Python SDK (pytest + ruff)</li>
+        <li><code>sdk-java/</code> — Java SDK</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-header">
+      <div class="card-icon" style="background:#4a1d96;">🌐</div>
+      <div><div class="card-title">UI 变体</div><div class="card-path">packages/desktop/ webui/ web-shell/</div></div>
+    </div>
+    <div class="card-desc">桌面应用、Web UI、Web Shell — 超越终端的多种交互界面。</div>
+    <div class="details">
+      <ul>
+        <li><code>desktop/</code> — Electron 桌面应用</li>
+        <li><code>webui/</code> — Web 界面</li>
+        <li><code>web-shell/</code> — 嵌入式 Web Shell</li>
+        <li><code>web-templates/</code> — Web 模板</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-header">
+      <div class="card-icon" style="background:#164e63;">🔗</div>
+      <div><div class="card-title">IDE & 协议集成</div><div class="card-path">packages/vscode-ide-companion/ ...</div></div>
+    </div>
+    <div class="card-desc">VS Code 插件、Zed 扩展、Chrome 扩展、ACP 桥接、CUA 驱动。</div>
+    <div class="details">
+      <ul>
+        <li><code>vscode-ide-companion/</code> — VS Code 插件</li>
+        <li><code>zed-extension/</code> — Zed 编辑器</li>
+        <li><code>chrome-extension/</code> — 浏览器扩展</li>
+        <li><code>acp-bridge/</code> — Agent Client Protocol</li>
+        <li><code>cua-driver/</code> — Computer Use Agent</li>
+        <li><code>mobile-mcp/</code> — 移动端 MCP</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section-title">🔀 包依赖关系</div>
+<div class="dep-graph">
+<pre>
+<span class="highlight">cli</span> ──→ <span class="highlight">core</span> ──→ @modelcontextprotocol/sdk (MCP)
+ │         │──→ openai (OpenAI API)
+ │         │──→ @anthropic-ai/sdk (Anthropic API)
+ │         │──→ @google/genai (Gemini API)
+ │         │──→ web-tree-sitter (代码解析)
+ │         └──→ undici (HTTP 客户端)
+ │
+ │──→ <span class="secondary">sdk-typescript</span>
+ │──→ <span class="secondary">channels/base</span> ←── telegram, dingtalk, weixin, feishu, wecom, qqbot, github
+ │──→ <span class="secondary">acp-bridge</span>
+ │──→ <span class="secondary">audio-capture</span>
+ │──→ <span class="secondary">web-templates</span>
+ │
+ └──→ ink (终端 React 渲染器)
+      react (UI 框架)
+      yargs (CLI 参数解析)
+      express (daemon HTTP)
+
+<span class="tertiary">独立包:</span> desktop, webui, web-shell, chrome-extension,
+        vscode-ide-companion, zed-extension, cua-driver, mobile-mcp
+</pre>
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#6366f1;"></div> 核心包</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#22c55e;"></div> CLI 直接依赖</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f59e0b;"></div> 独立包</div>
+</div>
+</div>

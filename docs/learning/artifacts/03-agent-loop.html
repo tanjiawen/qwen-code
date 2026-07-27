@@ -1,0 +1,186 @@
+<meta charset="UTF-8">
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e4e4e7; padding: 24px; line-height: 1.6; }
+h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
+.subtitle { color: #a1a1aa; margin-bottom: 24px; font-size: 0.9rem; }
+.loop-container { display: flex; flex-direction: column; gap: 24px; }
+.layer { background: #1a1b23; border: 1px solid #2e2f3a; border-radius: 12px; padding: 20px; position: relative; }
+.layer-label { position: absolute; top: -10px; left: 20px; background: #0f1117; padding: 0 8px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+.layer-ui .layer-label { color: #22c55e; }
+.layer-client .layer-label { color: #6366f1; }
+.layer-chat .layer-label { color: #f59e0b; }
+.layer-tool .layer-label { color: #ec4899; }
+.flow-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+.flow-node { padding: 8px 14px; border-radius: 8px; font-size: 0.8rem; font-weight: 500; white-space: nowrap; }
+.node-user { background: #14532d; color: #86efac; border: 1px solid #166534; }
+.node-action { background: #312e81; color: #a5b4fc; border: 1px solid #3730a3; }
+.node-event { background: #27272a; color: #d4d4d8; border: 1px solid #3f3f46; }
+.node-tool { background: #831843; color: #f9a8d4; border: 1px solid #9d174d; }
+.node-decision { background: #78350f; color: #fde68a; border: 1px solid #92400e; }
+.node-end { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+.arrow { color: #4b5563; font-size: 1.2rem; }
+.arrow-down { text-align: center; color: #4b5563; font-size: 1.5rem; margin: 8px 0; }
+.event-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin: 16px 0; }
+.event-item { display: flex; align-items: center; gap: 8px; font-size: 0.78rem; padding: 6px 10px; background: #27272a; border-radius: 6px; }
+.event-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.section-title { font-size: 1.1rem; font-weight: 600; margin: 32px 0 16px; color: #fff; }
+.code-ref { font-family: monospace; font-size: 0.72rem; color: #71717a; margin-top: 8px; }
+.note { background: #1e293b; border-left: 3px solid #6366f1; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 20px 0; font-size: 0.82rem; color: #cbd5e1; }
+.recursion-box { background: #1a1b23; border: 2px dashed #6366f1; border-radius: 12px; padding: 16px; margin: 16px 0; }
+.recursion-title { font-size: 0.85rem; font-weight: 600; color: #a5b4fc; margin-bottom: 8px; }
+.recursion-desc { font-size: 0.78rem; color: #a1a1aa; }
+.safety-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin: 16px 0; }
+.safety-card { background: #27272a; border-radius: 8px; padding: 12px; }
+.safety-title { font-size: 0.8rem; font-weight: 600; color: #fbbf24; margin-bottom: 4px; }
+.safety-desc { font-size: 0.75rem; color: #a1a1aa; }
+</style>
+
+<h1>🔄 千问 Code — Agent 循环交互图</h1>
+<p class="subtitle">用户输入 → LLM 推理 → 工具调用 → 结果回传 → 循环直到完成</p>
+
+<div class="loop-container">
+  <div class="layer layer-ui">
+    <div class="layer-label">UI 层 (packages/cli)</div>
+    <div class="flow-row">
+      <div class="flow-node node-user">👤 用户输入</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-action">AppContainer / nonInteractiveCli</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-event">client.sendMessageStream(parts)</div>
+    </div>
+    <div class="flow-row">
+      <div class="flow-node node-event">for await (event of stream)</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-action">渲染 Content / 收集 ToolCallRequest</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-tool">coreToolScheduler.executeToolCalls()</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-event">回传 ToolResult ↩️</div>
+    </div>
+    <div class="code-ref">📁 packages/cli/src/ui/components/AppContainer.tsx · packages/cli/src/nonInteractiveCli.ts</div>
+  </div>
+
+  <div class="arrow-down">⬇️ sendMessageStream(parts, signal, prompt_id, options, turns)</div>
+
+  <div class="layer layer-client">
+    <div class="layer-label">GeminiClient (packages/core/src/core/client.ts · 3385行)</div>
+    <div class="flow-row">
+      <div class="flow-node node-action">组装 System Reminders</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-action">Memory 预取 (recall)</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-action">Microcompaction</div>
+    </div>
+    <div class="flow-row">
+      <div class="flow-node node-action">turn.run(model, request, signal)</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-event">yield* 事件流</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-decision">LoopDetection 检查</div>
+    </div>
+    <div class="flow-row">
+      <div class="flow-node node-decision">无 tool calls?</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-action">Stop Hook 检查</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-decision">nextSpeaker?</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-end">return Turn</div>
+    </div>
+    <div class="code-ref">📁 关键方法: sendMessageStream() · 递归: yield* this.sendMessageStream(continueRequest, ..., boundedTurns - 1)</div>
+  </div>
+
+  <div class="arrow-down">⬇️ turn.run() → chat.sendMessageStream()</div>
+
+  <div class="layer layer-chat">
+    <div class="layer-label">GeminiChat (packages/core/src/core/geminiChat.ts · 4421行)</div>
+    <div class="flow-row">
+      <div class="flow-node node-action">历史压缩检查 (tryCompress)</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-action">构建 API 请求</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-action">LLM 流式调用</div>
+    </div>
+    <div class="flow-row">
+      <div class="flow-node node-event">Stream: text chunks</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-event">Stream: functionCall</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-event">Stream: finishReason</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-action">重试/退避/降级</div>
+    </div>
+    <div class="code-ref">📁 压缩: ChatCompressionService · 重试: retryWithBackoff · 降级: ModelFallback 事件</div>
+  </div>
+
+  <div class="arrow-down">⬇️ ToolCallRequest 事件上浮到 UI 层</div>
+
+  <div class="layer layer-tool">
+    <div class="layer-label">工具执行 (packages/core/src/core/coreToolScheduler.ts · 5396行)</div>
+    <div class="flow-row">
+      <div class="flow-node node-tool">Schema 校验</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-decision">权限检查 (permissionFlow)</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-user">用户确认?</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-tool">execute()</div>
+      <span class="arrow">→</span>
+      <div class="flow-node node-event">ToolResult → 回传 LLM</div>
+    </div>
+    <div class="code-ref">📁 权限: permissionFlow.ts · Hooks: toolHookTriggers.ts (PreToolUse/PostToolUse)</div>
+  </div>
+</div>
+
+<div class="section-title">📡 事件类型 (GeminiEventType)</div>
+<div class="event-list">
+  <div class="event-item"><div class="event-dot" style="background:#22c55e;"></div> Content — 文本流</div>
+  <div class="event-item"><div class="event-dot" style="background:#6366f1;"></div> ToolCallRequest — 工具调用请求</div>
+  <div class="event-item"><div class="event-dot" style="background:#ec4899;"></div> ToolCallResponse — 工具结果</div>
+  <div class="event-item"><div class="event-dot" style="background:#f59e0b;"></div> ToolCallConfirmation — 等待确认</div>
+  <div class="event-item"><div class="event-dot" style="background:#ef4444;"></div> Error — 错误</div>
+  <div class="event-item"><div class="event-dot" style="background:#8b5cf6;"></div> Thought — 思考过程</div>
+  <div class="event-item"><div class="event-dot" style="background:#14b8a6;"></div> Finished — 完成</div>
+  <div class="event-item"><div class="event-dot" style="background:#f97316;"></div> LoopDetected — 循环检测</div>
+  <div class="event-item"><div class="event-dot" style="background:#64748b;"></div> ChatCompressed — 压缩通知</div>
+  <div class="event-item"><div class="event-dot" style="background:#a855f7;"></div> ModelFallback — 模型降级</div>
+  <div class="event-item"><div class="event-dot" style="background:#06b6d4;"></div> Retry — 重试</div>
+  <div class="event-item"><div class="event-dot" style="background:#84cc16;"></div> StopHookLoop — Hook 续写</div>
+</div>
+
+<div class="section-title">🔁 递归续写机制</div>
+<div class="recursion-box">
+  <div class="recursion-title">yield* this.sendMessageStream(...) — 三种触发场景</div>
+  <div class="recursion-desc">
+    <p><strong>1. Stop Hook 阻断：</strong>模型想停止，但 Stop hook 返回 blocking → 注入 continuation reason → 递归继续</p>
+    <p style="margin-top:8px;"><strong>2. nextSpeaker = model：</strong>模型输出被截断（max_tokens）→ 自动发送 "Please continue." → 递归</p>
+    <p style="margin-top:8px;"><strong>3. Steer Input：</strong>用户在模型运行时追加了新消息 → 合并到下一轮 → 递归</p>
+    <p style="margin-top:12px;color:#fbbf24;">⚠️ 每次递归 turns 预算 -1，MAX_TURNS 防止无限循环</p>
+  </div>
+</div>
+
+<div class="section-title">🛡️ 安全机制</div>
+<div class="safety-grid">
+  <div class="safety-card">
+    <div class="safety-title">LoopDetectionService</div>
+    <div class="safety-desc">检测连续相同工具调用、内容重复、读写交替等死循环模式。Always-on 安全检查不可跳过。</div>
+  </div>
+  <div class="safety-card">
+    <div class="safety-title">MAX_TURNS 预算</div>
+    <div class="safety-desc">每次 sendMessageStream 递归消耗 1 turn。耗尽后强制停止，防止无限递归。</div>
+  </div>
+  <div class="safety-card">
+    <div class="safety-title">MaxSessionTurns</div>
+    <div class="safety-desc">全局会话轮次上限。超过后 yield MaxSessionTurns 事件终止会话。</div>
+  </div>
+  <div class="safety-card">
+    <div class="safety-title">SessionTokenLimit</div>
+    <div class="safety-desc">prompt token 超过 sessionTokenLimit 时终止，防止上下文溢出。</div>
+  </div>
+</div>
+
+<div class="note">
+  📌 <strong>核心设计思想：</strong>Agent 循环不是传统的 while(true) 循环，而是基于 <strong>AsyncGenerator + 递归</strong> 的事件流模型。UI 层通过 <code>for await</code> 消费事件，工具执行在 UI 层完成后以新的 <code>sendMessageStream(ToolResult)</code> 调用回传，形成"乒乓"式交互。
+</div>

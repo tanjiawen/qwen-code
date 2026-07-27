@@ -1,0 +1,242 @@
+<meta charset="UTF-8">
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e4e4e7; padding: 24px; line-height: 1.6; }
+h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
+.subtitle { color: #a1a1aa; margin-bottom: 24px; font-size: 0.9rem; }
+.pipeline { display: flex; flex-direction: column; gap: 4px; }
+.stage { background: #1a1b23; border: 1px solid #2e2f3a; border-radius: 10px; padding: 16px 20px; position: relative; cursor: pointer; transition: all 0.2s; }
+.stage:hover { border-color: #6366f1; }
+.stage.expanded .stage-details { display: block; }
+.stage-num { position: absolute; left: -12px; top: 50%; transform: translateY(-50%); width: 24px; height: 24px; background: #6366f1; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 700; color: #fff; }
+.stage-header { display: flex; align-items: center; justify-content: space-between; }
+.stage-title { font-weight: 600; font-size: 0.9rem; }
+.stage-file { font-size: 0.68rem; color: #71717a; font-family: monospace; }
+.stage-desc { font-size: 0.8rem; color: #a1a1aa; margin-top: 6px; }
+.stage-details { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #2e2f3a; font-size: 0.78rem; color: #d4d4d8; }
+.stage-details code { background: #27272a; padding: 1px 5px; border-radius: 3px; font-size: 0.72rem; color: #a78bfa; }
+.stage-details ul { padding-left: 16px; margin-top: 6px; }
+.stage-details li { margin: 3px 0; }
+.connector { text-align: center; color: #4b5563; font-size: 1.2rem; padding: 2px 0; }
+.section-title { font-size: 1.1rem; font-weight: 600; margin: 32px 0 16px; color: #fff; }
+.mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0; }
+.mode-card { background: #1a1b23; border-radius: 10px; padding: 16px; text-align: center; border: 1px solid #2e2f3a; }
+.mode-icon { font-size: 1.5rem; margin-bottom: 8px; }
+.mode-name { font-weight: 600; font-size: 0.85rem; margin-bottom: 4px; }
+.mode-desc { font-size: 0.72rem; color: #a1a1aa; }
+.mode-plan { border-color: #f59e0b; }
+.mode-default { border-color: #6366f1; }
+.mode-yolo { border-color: #22c55e; }
+.tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 16px 0; }
+.tool-item { background: #27272a; border-radius: 6px; padding: 10px; font-size: 0.75rem; }
+.tool-name { font-weight: 600; color: #a5b4fc; font-family: monospace; font-size: 0.72rem; }
+.tool-desc { color: #a1a1aa; margin-top: 2px; }
+.note { background: #1e293b; border-left: 3px solid #6366f1; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 20px 0; font-size: 0.82rem; color: #cbd5e1; }
+.hook-flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0; padding: 12px; background: #27272a; border-radius: 8px; }
+.hook-node { padding: 4px 10px; border-radius: 4px; font-size: 0.72rem; font-weight: 500; }
+.hook-pre { background: #312e81; color: #a5b4fc; }
+.hook-post { background: #14532d; color: #86efac; }
+.hook-arrow { color: #4b5563; }
+</style>
+
+<h1>🔧 千问 Code — 工具执行管线</h1>
+<p class="subtitle">从 LLM 发出 functionCall 到工具结果回传的完整生命周期 · 点击阶段展开详情</p>
+
+<div class="pipeline" style="padding-left: 16px;">
+  <div class="stage" onclick="this.classList.toggle('expanded')">
+    <div class="stage-num">1</div>
+    <div class="stage-header">
+      <div class="stage-title">📥 ToolCallRequest 接收</div>
+      <div class="stage-file">core/src/core/turn.ts</div>
+    </div>
+    <div class="stage-desc">LLM 流式响应中出现 functionCall part → Turn 收集到 pendingToolCalls 数组</div>
+    <div class="stage-details">
+      <ul>
+        <li>GeminiChat 解析流中的 <code>functionCall</code> part</li>
+        <li>生成 <code>ToolCallRequestInfo</code>：{ callId, name, args }</li>
+        <li>yield <code>GeminiEventType.ToolCallRequest</code> 事件</li>
+        <li>UI 层（AppContainer / nonInteractiveCli）收集所有 pending tool calls</li>
+      </ul>
+    </div>
+  </div>
+  <div class="connector">↓</div>
+
+  <div class="stage" onclick="this.classList.toggle('expanded')">
+    <div class="stage-num">2</div>
+    <div class="stage-header">
+      <div class="stage-title">🔍 Schema 校验 + 工具查找</div>
+      <div class="stage-file">core/src/tools/tools.ts · tool-names.ts</div>
+    </div>
+    <div class="stage-desc">在 ToolRegistry 中查找工具定义，校验参数 schema（FunctionDeclaration）</div>
+    <div class="stage-details">
+      <ul>
+        <li><code>ToolNames</code> enum 定义所有内置工具名</li>
+        <li>工具通过 <code>FunctionDeclaration</code> 描述参数 schema</li>
+        <li>支持 MCP 动态注册的工具（运行时发现）</li>
+        <li>Deferred tools：通过 <code>tool_search</code> 按需加载 schema</li>
+        <li>参数反序列化 + 路径 unescape（<code>unescapePath</code>）</li>
+      </ul>
+    </div>
+  </div>
+  <div class="connector">↓</div>
+
+  <div class="stage" onclick="this.classList.toggle('expanded')">
+    <div class="stage-num">3</div>
+    <div class="stage-header">
+      <div class="stage-title">🔐 权限评估 (Permission Flow)</div>
+      <div class="stage-file">core/src/core/permissionFlow.ts · permission-helpers.ts</div>
+    </div>
+    <div class="stage-desc">根据 ApprovalMode + 工具类型 + 参数内容决定是否需要用户确认</div>
+    <div class="stage-details">
+      <ul>
+        <li><code>needsConfirmation()</code> — 判断是否需要确认</li>
+        <li><code>evaluatePermissionFlow()</code> — 完整权限评估链</li>
+        <li><code>isAutoEditApproved()</code> — 编辑类工具自动批准检查</li>
+        <li><code>isPlanModeBlocked()</code> — Plan 模式下阻止写操作</li>
+        <li>权限规则持久化：<code>persistPermissionOutcome()</code></li>
+        <li>Plan 模式 shell 策略：<code>plan-mode-shell-policy.ts</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="connector">↓</div>
+
+  <div class="stage" onclick="this.classList.toggle('expanded')">
+    <div class="stage-num">4</div>
+    <div class="stage-header">
+      <div class="stage-title">🪝 PreToolUse Hook</div>
+      <div class="stage-file">core/src/core/toolHookTriggers.ts</div>
+    </div>
+    <div class="stage-desc">触发 PreToolUse 生命周期钩子，可修改参数或阻止执行</div>
+    <div class="stage-details">
+      <ul>
+        <li><code>firePreToolUseHook()</code> — 通过 MessageBus 发送 HOOK_EXECUTION_REQUEST</li>
+        <li>Hook 可返回：approve / deny / modify args</li>
+        <li>生成唯一 <code>toolUseId</code>（<code>generateToolUseId()</code>）</li>
+        <li>如 hook 阻止 → 返回 ToolResult with error</li>
+      </ul>
+    </div>
+  </div>
+  <div class="connector">↓</div>
+
+  <div class="stage" onclick="this.classList.toggle('expanded')">
+    <div class="stage-num">5</div>
+    <div class="stage-header">
+      <div class="stage-title">⚡ 工具执行 (execute)</div>
+      <div class="stage-file">core/src/core/coreToolScheduler.ts (5396行)</div>
+    </div>
+    <div class="stage-desc">调用工具的 execute() 方法，支持并发执行（CONCURRENCY_SAFE_KINDS）</div>
+    <div class="stage-details">
+      <ul>
+        <li>并发安全工具（read_file, glob, grep_search）可并行执行</li>
+        <li>写操作工具（edit, write_file, shell）串行执行</li>
+        <li>AbortSignal 传播（用户 Ctrl+C 可中断）</li>
+        <li>Shell 工具：PTY 分配 + 超时 + 输出捕获</li>
+        <li>输出截断：<code>truncateToolOutput()</code>（防止上下文溢出）</li>
+        <li>大输出持久化：<code>persistAndTruncateToolResult()</code></li>
+      </ul>
+    </div>
+  </div>
+  <div class="connector">↓</div>
+
+  <div class="stage" onclick="this.classList.toggle('expanded')">
+    <div class="stage-num">6</div>
+    <div class="stage-header">
+      <div class="stage-title">🪝 PostToolUse Hook + 结果处理</div>
+      <div class="stage-file">core/src/core/toolHookTriggers.ts · tool-response-finalizer.ts</div>
+    </div>
+    <div class="stage-desc">触发 PostToolUse 钩子，格式化结果，构建 functionResponse part</div>
+    <div class="stage-details">
+      <ul>
+        <li><code>firePostToolUseHook()</code> — 通知 hook 执行结果</li>
+        <li><code>firePostToolBatchHook()</code> — 批量工具完成后触发</li>
+        <li><code>finalizeToolResponses()</code> — 批量结果预算控制</li>
+        <li><code>enforceFunctionResponseBudget()</code> — 字符数预算</li>
+        <li>构建 <code>FunctionResponsePart</code>：{ functionResponse: { name, response } }</li>
+        <li>附加 additional context（<code>appendAdditionalContext()</code>）</li>
+      </ul>
+    </div>
+  </div>
+  <div class="connector">↓</div>
+
+  <div class="stage" onclick="this.classList.toggle('expanded')">
+    <div class="stage-num">7</div>
+    <div class="stage-header">
+      <div class="stage-title">📤 结果回传 LLM</div>
+      <div class="stage-file">core/src/core/client.ts → geminiChat.ts</div>
+    </div>
+    <div class="stage-desc">UI 层调用 client.sendMessageStream(toolResultParts, type=ToolResult) 回传</div>
+    <div class="stage-details">
+      <ul>
+        <li><code>SendMessageType.ToolResult</code> 标识这是工具结果回传</li>
+        <li>functionResponse parts 必须紧跟 functionCall（API 约束）</li>
+        <li>Memory 注入点：tool result 时消费预取的 recall 结果</li>
+        <li>Microcompaction：size-only 检查（不触发 idle 清理）</li>
+        <li>循环继续：LLM 可能再次发出 tool calls → 回到步骤 1</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section-title">🔑 三种审批模式 (ApprovalMode)</div>
+<div class="mode-grid">
+  <div class="mode-card mode-plan">
+    <div class="mode-icon">📋</div>
+    <div class="mode-name">Plan</div>
+    <div class="mode-desc">只读模式。所有写操作（edit/write/shell）被阻止，只能读取和搜索。需要 exitPlanMode 工具退出。</div>
+  </div>
+  <div class="mode-card mode-default">
+    <div class="mode-icon">⚖️</div>
+    <div class="mode-name">Default</div>
+    <div class="mode-desc">读操作自动批准，写操作需要用户确认。shell 命令根据只读性判断（isShellCommandReadOnly）。</div>
+  </div>
+  <div class="mode-card mode-yolo">
+    <div class="mode-icon">🚀</div>
+    <div class="mode-name">YOLO</div>
+    <div class="mode-desc">所有操作自动批准，无需确认。适用于沙箱环境或高度信任场景。Headless 模式会输出安全警告。</div>
+  </div>
+</div>
+
+<div class="section-title">🪝 Hook 生命周期</div>
+<div class="hook-flow">
+  <div class="hook-node hook-pre">PreToolUse</div>
+  <span class="hook-arrow">→ 可阻止/修改 →</span>
+  <div class="hook-node" style="background:#78350f;color:#fde68a;">execute()</div>
+  <span class="hook-arrow">→</span>
+  <div class="hook-node hook-post">PostToolUse</div>
+  <span class="hook-arrow">→ 批量完成 →</span>
+  <div class="hook-node hook-post">PostToolBatch</div>
+</div>
+<div class="hook-flow">
+  <div class="hook-node hook-pre">UserPromptSubmit</div>
+  <span class="hook-arrow">→ 用户发消息时 →</span>
+  <div class="hook-node" style="background:#78350f;color:#fde68a;">Agent 循环</div>
+  <span class="hook-arrow">→ 模型停止时 →</span>
+  <div class="hook-node hook-post">Stop</div>
+  <span class="hook-arrow">→ 可强制续写 →</span>
+  <div class="hook-node" style="background:#312e81;color:#a5b4fc;">递归 ↩️</div>
+</div>
+
+<div class="section-title">🛠️ 内置工具一览</div>
+<div class="tool-grid">
+  <div class="tool-item"><div class="tool-name">read_file</div><div class="tool-desc">读取文件内容</div></div>
+  <div class="tool-item"><div class="tool-name">write_file</div><div class="tool-desc">创建/覆写文件</div></div>
+  <div class="tool-item"><div class="tool-name">edit</div><div class="tool-desc">精确文本替换编辑</div></div>
+  <div class="tool-item"><div class="tool-name">glob</div><div class="tool-desc">文件名模式匹配</div></div>
+  <div class="tool-item"><div class="tool-name">grep_search</div><div class="tool-desc">正则内容搜索</div></div>
+  <div class="tool-item"><div class="tool-name">run_shell_command</div><div class="tool-desc">执行 shell 命令</div></div>
+  <div class="tool-item"><div class="tool-name">agent</div><div class="tool-desc">启动子 Agent</div></div>
+  <div class="tool-item"><div class="tool-name">ask_user_question</div><div class="tool-desc">向用户提问</div></div>
+  <div class="tool-item"><div class="tool-name">todo_write</div><div class="tool-desc">任务列表管理</div></div>
+  <div class="tool-item"><div class="tool-name">notebook_edit</div><div class="tool-desc">Jupyter 编辑</div></div>
+  <div class="tool-item"><div class="tool-name">skill</div><div class="tool-desc">调用 Skill</div></div>
+  <div class="tool-item"><div class="tool-name">tool_search</div><div class="tool-desc">延迟工具发现</div></div>
+  <div class="tool-item"><div class="tool-name">enter_plan_mode</div><div class="tool-desc">进入计划模式</div></div>
+  <div class="tool-item"><div class="tool-name">exit_plan_mode</div><div class="tool-desc">退出计划模式</div></div>
+  <div class="tool-item"><div class="tool-name">artifact</div><div class="tool-desc">发布 HTML 页面</div></div>
+  <div class="tool-item"><div class="tool-name">list_directory</div><div class="tool-desc">列出目录内容</div></div>
+</div>
+
+<div class="note">
+  📌 <strong>设计亮点：</strong>工具执行管线将"决策"（权限）和"执行"（execute）分离。PreToolUse hook 提供了 AOP 式的切面能力——外部脚本可以在不修改核心代码的情况下拦截、修改、审计任何工具调用。这是千问 Code 可扩展性的基石。
+</div>

@@ -1,0 +1,253 @@
+<meta charset="UTF-8">
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e4e4e7; padding: 24px; line-height: 1.6; }
+h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
+.subtitle { color: #a1a1aa; margin-bottom: 24px; font-size: 0.9rem; }
+.section-title { font-size: 1.1rem; font-weight: 600; margin: 32px 0 16px; color: #fff; }
+.flow-diagram { background: #1a1b23; border: 1px solid #2e2f3a; border-radius: 12px; padding: 24px; overflow-x: auto; margin: 16px 0; }
+.flow-diagram pre { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.75rem; line-height: 1.7; color: #d4d4d8; white-space: pre; }
+.c1 { color: #6366f1; } .c2 { color: #22c55e; } .c3 { color: #f59e0b; } .c4 { color: #ec4899; } .c5 { color: #06b6d4; } .c6 { color: #a855f7; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 16px 0; }
+.card { background: #1a1b23; border: 1px solid #2e2f3a; border-radius: 10px; padding: 16px; cursor: pointer; transition: all 0.2s; }
+.card:hover { border-color: #6366f1; }
+.card.expanded .card-details { display: block; }
+.card-title { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; }
+.card-desc { font-size: 0.78rem; color: #a1a1aa; margin-top: 6px; }
+.card-details { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #2e2f3a; font-size: 0.75rem; color: #d4d4d8; }
+.card-details code { background: #27272a; padding: 1px 4px; border-radius: 3px; font-size: 0.7rem; color: #a78bfa; }
+.card-details ul { padding-left: 14px; margin-top: 6px; }
+.card-details li { margin: 3px 0; }
+.note { background: #1e293b; border-left: 3px solid #6366f1; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 20px 0; font-size: 0.82rem; color: #cbd5e1; }
+.tag { display: inline-block; font-size: 0.65rem; padding: 2px 6px; border-radius: 3px; margin-right: 4px; }
+.tag-read { background: #14532d; color: #86efac; }
+.tag-write { background: #7c2d12; color: #fdba74; }
+.tag-async { background: #1e3a5f; color: #93c5fd; }
+</style>
+
+<h1>🌊 千问 Code — 数据流全景图</h1>
+<p class="subtitle">Config · Memory · MCP · Hooks · Context 如何在各层之间流动</p>
+
+<div class="section-title">📐 全局数据流</div>
+<div class="flow-diagram">
+<pre>
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          <span class="c2">外部数据源</span>                                         │
+│  ~/.qwen/settings.json   .qwen/settings.json   QWEN.md   .env   MCP servers │
+└──────────┬──────────────────────┬─────────────────┬──────────────┬──────────┘
+           │                      │                 │              │
+           ▼                      ▼                 ▼              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       <span class="c1">Config 层</span> (配置聚合)                                  │
+│                                                                             │
+│  <span class="c1">loadSettings()</span> ──→ settings.merged ──→ <span class="c1">loadCliConfig()</span> ──→ <span class="c1">Config 对象</span>    │
+│                                                                             │
+│  Config 持有:                                                               │
+│  ├── ModelsConfig (model, auth, provider)                                   │
+│  ├── ToolRegistry (内置 + MCP 工具)                                         │
+│  ├── MemoryManager (auto-memory)                                            │
+│  ├── McpServers[] (连接管理)                                                │
+│  ├── Hooks (lifecycle callbacks)                                            │
+│  ├── Extensions[] (扩展)                                                    │
+│  └── SessionState (id, history, approval mode)                              │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       <span class="c3">Agent 引擎</span> (运行时)                                    │
+│                                                                             │
+│  ┌─────────────┐    ┌──────────────┐    ┌─────────────────┐                │
+│  │ <span class="c3">Prompts</span>     │    │ <span class="c3">GeminiClient</span> │    │ <span class="c3">CoreToolScheduler</span>│                │
+│  │             │    │              │    │                 │                │
+│  │ system      │───→│ sendMessage  │───→│ permission      │                │
+│  │ prompt      │    │ Stream()     │    │ → execute       │                │
+│  │ assembly    │    │              │    │ → result        │                │
+│  └─────────────┘    └──────┬───────┘    └─────────────────┘                │
+│                            │                                                │
+│                            ▼                                                │
+│  ┌─────────────────────────────────────────────────────────────────┐       │
+│  │                    <span class="c4">GeminiChat</span> (对话管理)                         │       │
+│  │                                                                 │       │
+│  │  history: Content[] ←→ <span class="c4">ChatCompressionService</span> (自动压缩)       │       │
+│  │       │                                                         │       │
+│  │       ▼                                                         │       │
+│  │  <span class="c4">LLM API</span> (OpenAI / Anthropic / Gemini / Qwen)                  │       │
+│  │       │                                                         │       │
+│  │       ▼                                                         │       │
+│  │  Stream Events → yield 给上层                                   │       │
+│  └─────────────────────────────────────────────────────────────────┘       │
+└──────────────────────────────────┬──────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       <span class="c5">UI / 输出层</span>                                            │
+│                                                                             │
+│  交互模式: <span class="c5">Ink/React TUI</span> ← for await (events) → 渲染 Markdown/代码/进度     │
+│  非交互:   <span class="c5">stdout</span> ← text / json / stream-json 格式输出                      │
+│  Daemon:   <span class="c5">HTTP SSE</span> ← Express 路由 → SDK 客户端                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+</pre>
+</div>
+
+<div class="section-title">🧠 Memory 数据流</div>
+<div class="flow-diagram">
+<pre>
+<span class="c6">写入路径:</span>
+  模型调用 write_file → ~/.qwen/memories/*.md (user) 或 project memory
+  触发: 模型主动 / 用户 "记住这个" / auto-skill 提取
+
+<span class="c6">读取路径 (recall):</span>
+  用户发消息 ──→ <span class="c6">MemoryManager.recall()</span> (异步预取)
+                      │
+                      ├── 搜索 MEMORY.md 索引
+                      ├── 语义匹配相关文件
+                      └── 构建 system-reminder 注入
+                      │
+                      ▼
+  注入时机:
+  ├── <span class="tag tag-async">UserQuery</span> → systemReminders.unshift(memory.prompt)
+  └── <span class="tag tag-async">ToolResult</span> → requestToSend.push(memory.prompt)
+
+<span class="c6">Auto-Skill:</span>
+  会话结束 → 检测重复模式 → 提取为 skill → 写入 ~/.qwen/skills/
+</pre>
+</div>
+
+<div class="section-title">🔌 MCP 数据流</div>
+<div class="flow-diagram">
+<pre>
+<span class="c2">配置:</span> settings.json.mcpServers / .qwen/settings.json / mcp.json
+
+<span class="c2">启动:</span>
+  config.initialize()
+    → discoverAllMcpToolsIncremental()
+      → 对每个 server: spawn 子进程 / HTTP 连接
+        → listTools() → 注册到 ToolRegistry
+        → listResources() → 可通过 read_mcp_resource 访问
+
+<span class="c2">运行时:</span>
+  LLM 调用 MCP 工具 → coreToolScheduler → McpTool.execute()
+    → JSON-RPC callTool → MCP server → 返回结果
+
+<span class="c2">热重载:</span>
+  SettingsWatcher 检测 settings.json 变化
+    → registerMcpHotReload() → reconnect / disconnect / restart
+</pre>
+</div>
+
+<div class="section-title">📦 核心数据对象</div>
+<div class="grid">
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-title">⚙️ Config</div>
+    <div class="card-desc">全局配置中心，贯穿整个生命周期</div>
+    <div class="card-details">
+      <ul>
+        <li><code>packages/core/src/config/config.ts</code></li>
+        <li><span class="tag tag-read">读</span> getModel(), getApprovalMode(), getToolRegistry()</li>
+        <li><span class="tag tag-write">写</span> initialize(), shutdown(), setTools()</li>
+        <li><span class="tag tag-async">异步</span> waitForMcpReady(), refreshAuth()</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-title">💬 Content[] (对话历史)</div>
+    <div class="card-desc">GeminiChat 维护的消息数组</div>
+    <div class="card-details">
+      <ul>
+        <li><code>packages/core/src/core/geminiChat.ts</code></li>
+        <li>结构: { role: 'user'|'model', parts: Part[] }</li>
+        <li>Part 类型: text, functionCall, functionResponse, inlineData</li>
+        <li><span class="tag tag-write">写</span> addHistory(), 压缩时替换</li>
+        <li><span class="tag tag-read">读</span> getHistory(), peekLastHistoryEntry()</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-title">🔧 ToolRegistry</div>
+    <div class="card-desc">工具注册表：内置 + MCP + Deferred</div>
+    <div class="card-details">
+      <ul>
+        <li><code>packages/core/src/tools/tool-registry.ts</code></li>
+        <li>内置工具: 静态注册（read_file, edit, shell...）</li>
+        <li>MCP 工具: config.initialize() 时动态注册</li>
+        <li>Deferred 工具: tool_search 按需加载 schema</li>
+        <li><span class="tag tag-read">读</span> getTools(), getToolDeclarations()</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-title">📝 System Prompt</div>
+    <div class="card-desc">每次 API 调用的指令前缀</div>
+    <div class="card-details">
+      <ul>
+        <li><code>packages/core/src/core/prompts.ts</code></li>
+        <li>assembleSystemPrompt() 组装:</li>
+        <li>├── getCoreSystemPrompt() — 核心行为指令</li>
+        <li>├── getCustomSystemPrompt() — QWEN.md 内容</li>
+        <li>├── 工具 schema 描述</li>
+        <li>├── 环境上下文 (OS, cwd, date)</li>
+        <li>└── Memory / Skills 提示</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-title">🪝 MessageBus</div>
+    <div class="card-desc">Hook 通信总线（发布/订阅）</div>
+    <div class="card-details">
+      <ul>
+        <li><code>packages/core/src/confirmation-bus/</code></li>
+        <li>request(HOOK_EXECUTION_REQUEST) → 等待 HOOK_EXECUTION_RESPONSE</li>
+        <li>事件: UserPromptSubmit, PreToolUse, PostToolUse, Stop, MessageDisplay</li>
+        <li><span class="tag tag-async">异步</span> 支持超时 + abort</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card" onclick="this.classList.toggle('expanded')">
+    <div class="card-title">📊 Telemetry</div>
+    <div class="card-desc">遥测与使用统计</div>
+    <div class="card-details">
+      <ul>
+        <li><code>packages/core/src/telemetry/</code></li>
+        <li>uiTelemetryService — 会话级指标（token 用量、请求数）</li>
+        <li>OpenTelemetry SDK — traces/metrics/logs 导出</li>
+        <li>persistSessionUsage() — 跨会话使用报告</li>
+        <li><span class="tag tag-read">读</span> getLastPromptTokenCount()</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="section-title">🔄 Context 压缩生命周期</div>
+<div class="flow-diagram">
+<pre>
+<span class="c3">Token 预算模型:</span>
+
+  contextWindowSize (如 128K)
+  ├── <span class="c3">soft threshold</span> (autoCompactThreshold, 如 80%) → 触发自动压缩
+  ├── <span class="c3">hard threshold</span> (window - HARD_BUFFER) → 强制压缩 (hard-tier rescue)
+  └── <span class="c3">output clamp</span> → maxOutputTokens = min(ceiling, window - promptTokens)
+
+<span class="c3">压缩触发:</span>
+  每次 sendMessageStream 前:
+    estimatePromptTokens() → 与阈值比较
+      ├── < soft  → NOOP
+      ├── ≥ soft → <span class="c3">ChatCompressionService.compress()</span> (LLM 摘要)
+      └── ≥ hard → 强制 compress (force=true)
+
+<span class="c3">微压缩 (Microcompaction):</span>
+  独立于主压缩，清理:
+  ├── idle 超时工具结果 (thinking blocks)
+  ├── 累积大小超限的旧结果
+  └── 在 UserQuery / Hook / ToolResult 时触发
+</pre>
+</div>
+
+<div class="note">
+  📌 <strong>架构核心思想：</strong>千问 Code 的数据流遵循"<strong>Config 中心辐射</strong>"模式——所有配置从 Config 对象辐射到各子系统。运行时数据（对话历史、工具结果）在 GeminiChat 内闭环，通过 AsyncGenerator 事件流向上层暴露。Memory 和 MCP 是两条独立的异步数据管道，在特定时机（UserQuery / ToolResult）汇入主流程。
+</div>

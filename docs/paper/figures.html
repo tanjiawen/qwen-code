@@ -1,0 +1,1283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qwen Code — Architecture Figures</title>
+<style>
+:root {
+  --bg: #0f172a;
+  --bg-card: #1e293b;
+  --bg-elevated: #334155;
+  --text: #e2e8f0;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+  --border: #475569;
+  --accent-blue: #38bdf8;
+  --accent-green: #4ade80;
+  --accent-purple: #a78bfa;
+  --accent-orange: #fb923c;
+  --accent-pink: #f472b6;
+  --accent-red: #f87171;
+  --accent-yellow: #fbbf24;
+  --accent-cyan: #22d3ee;
+  --accent-teal: #2dd4bf;
+  --accent-indigo: #818cf8;
+  --layer-entry: #0ea5e9;
+  --layer-agent: #8b5cf6;
+  --layer-tool: #f59e0b;
+  --layer-persist: #10b981;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  padding: 2rem 1rem;
+}
+.container { max-width: 1200px; margin: 0 auto; }
+h1 {
+  text-align: center;
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.subtitle {
+  text-align: center;
+  color: var(--text-muted);
+  margin-bottom: 2rem;
+  font-size: 0.95rem;
+}
+/* TOC */
+.toc {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem 2rem;
+  margin-bottom: 3rem;
+  box-shadow: var(--shadow);
+}
+.toc h2 { font-size: 1.1rem; margin-bottom: 1rem; color: var(--accent-blue); }
+.toc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.5rem;
+}
+.toc a {
+  color: var(--text);
+  text-decoration: none;
+  padding: 0.4rem 0.8rem;
+  border-radius: var(--radius-sm);
+  transition: background 0.2s, color 0.2s;
+  font-size: 0.9rem;
+  display: block;
+}
+.toc a:hover { background: var(--bg-elevated); color: var(--accent-blue); }
+.toc a .fig-num { color: var(--accent-purple); font-weight: 600; margin-right: 0.4rem; }
+/* Figure sections */
+section.figure {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 2rem;
+  margin-bottom: 3rem;
+  box-shadow: var(--shadow);
+  overflow-x: auto;
+}
+section.figure h2 {
+  font-size: 1.2rem;
+  margin-bottom: 0.3rem;
+  color: var(--accent-blue);
+}
+section.figure .fig-title {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  margin-bottom: 1.5rem;
+  font-style: italic;
+}
+/* Diagram primitives */
+.diagram { position: relative; width: 100%; min-height: 200px; }
+.box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  font-weight: 500;
+  text-align: center;
+  border: 2px solid;
+  position: relative;
+  white-space: nowrap;
+}
+.box-sm { padding: 0.35rem 0.7rem; font-size: 0.75rem; }
+.box-lg { padding: 0.8rem 1.4rem; font-size: 0.9rem; }
+.file-path {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  display: block;
+  margin-top: 2px;
+}
+/* Layer colors */
+.l-entry { background: rgba(14,165,233,0.12); border-color: var(--layer-entry); color: var(--layer-entry); }
+.l-agent { background: rgba(139,92,246,0.12); border-color: var(--layer-agent); color: var(--layer-agent); }
+.l-tool { background: rgba(245,158,11,0.12); border-color: var(--layer-tool); color: var(--layer-tool); }
+.l-persist { background: rgba(16,185,129,0.12); border-color: var(--layer-persist); color: var(--layer-persist); }
+.l-security { background: rgba(248,113,113,0.12); border-color: var(--accent-red); color: var(--accent-red); }
+.l-blue { background: rgba(56,189,248,0.12); border-color: var(--accent-blue); color: var(--accent-blue); }
+.l-green { background: rgba(74,222,128,0.12); border-color: var(--accent-green); color: var(--accent-green); }
+.l-purple { background: rgba(167,139,250,0.12); border-color: var(--accent-purple); color: var(--accent-purple); }
+.l-orange { background: rgba(251,146,60,0.12); border-color: var(--accent-orange); color: var(--accent-orange); }
+.l-pink { background: rgba(244,114,182,0.12); border-color: var(--accent-pink); color: var(--accent-pink); }
+.l-cyan { background: rgba(34,211,238,0.12); border-color: var(--accent-cyan); color: var(--accent-cyan); }
+.l-yellow { background: rgba(251,191,36,0.12); border-color: var(--accent-yellow); color: var(--accent-yellow); }
+.l-teal { background: rgba(45,212,191,0.12); border-color: var(--accent-teal); color: var(--accent-teal); }
+.l-indigo { background: rgba(129,140,248,0.12); border-color: var(--accent-indigo); color: var(--accent-indigo); }
+/* Grouping boxes */
+.group {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 1.2rem;
+  position: relative;
+}
+.group-label {
+  position: absolute;
+  top: -0.7rem;
+  left: 1rem;
+  background: var(--bg-card);
+  padding: 0 0.5rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+/* Flow layouts */
+.flow-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 0.8rem 0;
+}
+.flow-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.8rem;
+}
+.flow-grid {
+  display: grid;
+  gap: 1rem;
+  justify-items: center;
+  align-items: center;
+}
+/* Arrows */
+.arrow {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  user-select: none;
+}
+.arrow-down {
+  display: flex;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  margin: 0.3rem 0;
+}
+.arrow-label {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  text-align: center;
+  margin-top: -2px;
+}
+/* Layer bands */
+.layer-band {
+  border-radius: var(--radius);
+  padding: 1rem 1.2rem;
+  margin: 0.6rem 0;
+  border-left: 4px solid;
+}
+.layer-band h4 {
+  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.layer-band .items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+/* Sequence diagram */
+.seq-lane {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 100px;
+}
+.seq-lifeline {
+  width: 2px;
+  background: var(--border);
+  flex: 1;
+  min-height: 20px;
+}
+.seq-msg {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  padding: 0.3rem 0;
+}
+/* Pipeline */
+.pipeline {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  overflow-x: auto;
+  padding: 0.5rem 0;
+}
+.pipeline-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.8rem 1rem;
+  min-width: 110px;
+  position: relative;
+  border: 2px solid;
+  border-radius: var(--radius-sm);
+  margin: 0 2px;
+}
+.pipeline-stage::after {
+  content: '→';
+  position: absolute;
+  right: -14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  z-index: 1;
+}
+.pipeline-stage:last-child::after { content: ''; }
+.pipeline-stage .stage-num {
+  font-size: 0.65rem;
+  font-weight: 700;
+  opacity: 0.7;
+  margin-bottom: 0.3rem;
+}
+.pipeline-stage .stage-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.pipeline-stage .stage-desc {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  margin-top: 0.2rem;
+  text-align: center;
+}
+/* Threshold bar */
+.threshold-bar {
+  display: flex;
+  align-items: center;
+  border-radius: 20px;
+  overflow: hidden;
+  height: 36px;
+  margin: 1rem 0;
+  border: 2px solid var(--border);
+}
+.threshold-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  height: 100%;
+  padding: 0 0.5rem;
+  white-space: nowrap;
+}
+/* Badge */
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+/* Legend */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 2px solid;
+}
+/* Responsive */
+@media (max-width: 768px) {
+  body { padding: 1rem 0.5rem; }
+  section.figure { padding: 1.2rem; }
+  .pipeline { flex-direction: column; align-items: center; }
+  .pipeline-stage::after { content: '↓'; right: auto; bottom: -14px; top: auto; transform: none; }
+  .flow-row { flex-direction: column; }
+  .arrow { transform: rotate(90deg); }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Qwen Code: System Architecture</h1>
+<p class="subtitle">Technical Paper — Color Architecture Figures (1–12)</p>
+
+<!-- Table of Contents -->
+<nav class="toc">
+  <h2>📑 Contents</h2>
+  <div class="toc-grid">
+    <a href="#fig1"><span class="fig-num">Fig 1</span> System Four-Layer Architecture</a>
+    <a href="#fig2"><span class="fig-num">Fig 2</span> Startup Sequence</a>
+    <a href="#fig3"><span class="fig-num">Fig 3</span> Agent Core Loop (ReAct+)</a>
+    <a href="#fig4"><span class="fig-num">Fig 4</span> Tool Execution Pipeline</a>
+    <a href="#fig5"><span class="fig-num">Fig 5</span> Five-Layer Security</a>
+    <a href="#fig6"><span class="fig-num">Fig 6</span> Adaptive Context Compression</a>
+    <a href="#fig7"><span class="fig-num">Fig 7</span> Event-Driven System Reminders</a>
+    <a href="#fig8"><span class="fig-num">Fig 8</span> Memory System Data Flow</a>
+    <a href="#fig9"><span class="fig-num">Fig 9</span> MCP Integration</a>
+    <a href="#fig10"><span class="fig-num">Fig 10</span> Sub-Agent &amp; Fork System</a>
+    <a href="#fig11"><span class="fig-num">Fig 11</span> Config Hierarchy &amp; Hot Reload</a>
+    <a href="#fig12"><span class="fig-num">Fig 12</span> Multi-Frontend Architecture</a>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 1: Four-Layer Architecture -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig1">
+  <h2>Figure 1</h2>
+  <p class="fig-title">System Four-Layer Architecture Overview — from user input to persistent state</p>
+
+  <div class="diagram">
+    <!-- Layer 1: Entry & UI -->
+    <div class="layer-band" style="border-color: var(--layer-entry); background: rgba(14,165,233,0.06);">
+      <h4 style="color: var(--layer-entry);">Layer 1 · Entry &amp; UI</h4>
+      <div class="items">
+        <span class="box box-sm l-entry">TUI (Ink/React)<span class="file-path">packages/cli/src/ui/</span></span>
+        <span class="box box-sm l-entry">Headless CLI<span class="file-path">--print / -p</span></span>
+        <span class="box box-sm l-entry">Daemon (serve)<span class="file-path">qwen serve</span></span>
+        <span class="box box-sm l-entry">SDK / API<span class="file-path">packages/sdk/</span></span>
+        <span class="box box-sm l-entry">IDE Extension<span class="file-path">VS Code / JetBrains</span></span>
+      </div>
+    </div>
+
+    <div class="arrow-down">▼ <span class="arrow-label">UserQuery / Steer / Notification</span></div>
+
+    <!-- Layer 2: Agent -->
+    <div class="layer-band" style="border-color: var(--layer-agent); background: rgba(139,92,246,0.06);">
+      <h4 style="color: var(--layer-agent);">Layer 2 · Agent Core</h4>
+      <div class="items">
+        <span class="box box-sm l-agent">GeminiClient<span class="file-path">core/client.ts</span></span>
+        <span class="box box-sm l-agent">Turn (Event Stream)<span class="file-path">core/turn.ts</span></span>
+        <span class="box box-sm l-agent">GeminiChat<span class="file-path">core/geminiChat.ts</span></span>
+        <span class="box box-sm l-agent">LoopDetector<span class="file-path">services/loopDetectionService.ts</span></span>
+        <span class="box box-sm l-agent">Prompt Assembly<span class="file-path">core/prompts.ts</span></span>
+      </div>
+    </div>
+
+    <div class="arrow-down">▼ <span class="arrow-label">FunctionCall / ToolCallRequest</span></div>
+
+    <!-- Layer 3: Tools & Context -->
+    <div class="layer-band" style="border-color: var(--layer-tool); background: rgba(245,158,11,0.06);">
+      <h4 style="color: var(--layer-tool);">Layer 3 · Tools &amp; Context</h4>
+      <div class="items">
+        <span class="box box-sm l-tool">CoreToolScheduler<span class="file-path">core/coreToolScheduler.ts</span></span>
+        <span class="box box-sm l-tool">ToolRegistry<span class="file-path">tools/tool-registry.ts</span></span>
+        <span class="box box-sm l-tool">PermissionFlow<span class="file-path">core/permissionFlow.ts</span></span>
+        <span class="box box-sm l-tool">MCP Client<span class="file-path">tools/mcp-client.ts</span></span>
+        <span class="box box-sm l-tool">SkillManager<span class="file-path">skills/skill-manager.ts</span></span>
+        <span class="box box-sm l-tool">SubagentManager<span class="file-path">subagents/</span></span>
+      </div>
+    </div>
+
+    <div class="arrow-down">▼ <span class="arrow-label">Read / Write / Execute</span></div>
+
+    <!-- Layer 4: Persistence -->
+    <div class="layer-band" style="border-color: var(--layer-persist); background: rgba(16,185,129,0.06);">
+      <h4 style="color: var(--layer-persist);">Layer 4 · Persistence &amp; State</h4>
+      <div class="items">
+        <span class="box box-sm l-persist">Config (4-level)<span class="file-path">config/config.ts</span></span>
+        <span class="box box-sm l-persist">Memory Store<span class="file-path">memory/manager.ts</span></span>
+        <span class="box box-sm l-persist">Session History<span class="file-path">services/sessionService.ts</span></span>
+        <span class="box box-sm l-persist">File System<span class="file-path">FS / Git / Worktree</span></span>
+        <span class="box box-sm l-persist">Telemetry<span class="file-path">telemetry/</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--layer-entry); background: rgba(14,165,233,0.3);"></div>Entry &amp; UI</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--layer-agent); background: rgba(139,92,246,0.3);"></div>Agent Core</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--layer-tool); background: rgba(245,158,11,0.3);"></div>Tools &amp; Context</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--layer-persist); background: rgba(16,185,129,0.3);"></div>Persistence</div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 2: Startup Sequence -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig2">
+  <h2>Figure 2</h2>
+  <p class="fig-title">Startup Sequence — from <code>qwen</code> command to first TUI render</p>
+
+  <div class="diagram">
+    <div class="flow-col" style="width:100%;">
+      <!-- Phase 1 -->
+      <div class="flow-row">
+        <span class="box l-blue box-lg">$ qwen [args]<span class="file-path">bin/qwen.js</span></span>
+        <span class="arrow">→</span>
+        <span class="box l-blue">Node.js Bootstrap<span class="file-path">~5ms</span></span>
+        <span class="arrow">→</span>
+        <span class="box l-blue">CLI Arg Parse<span class="file-path">yargs / commander</span></span>
+      </div>
+      <div class="arrow-down">▼</div>
+      <!-- Phase 2 -->
+      <div class="flow-row">
+        <span class="box l-purple">Config Resolution<span class="file-path">config/config.ts · ~20ms</span></span>
+        <span class="arrow">→</span>
+        <span class="box l-purple">Auth / API Key<span class="file-path">contentGenerator.ts</span></span>
+        <span class="arrow">→</span>
+        <span class="box l-purple">Tool Registry Init<span class="file-path">tool-registry.ts · ~15ms</span></span>
+      </div>
+      <div class="arrow-down">▼</div>
+      <!-- Phase 3: Branch -->
+      <div class="group" style="width:90%; max-width:800px;">
+        <span class="group-label">Mode Branch</span>
+        <div class="flow-row" style="justify-content: space-around;">
+          <div class="flow-col">
+            <span class="box l-green">Interactive TUI<span class="file-path">gemini.tsx → Ink render</span></span>
+            <span class="badge" style="background:rgba(74,222,128,0.2); color:var(--accent-green);">default</span>
+          </div>
+          <div class="flow-col">
+            <span class="box l-orange">Headless (-p)<span class="file-path">nonInteractiveMain()</span></span>
+            <span class="badge" style="background:rgba(251,146,60,0.2); color:var(--accent-orange);">--print</span>
+          </div>
+          <div class="flow-col">
+            <span class="box l-pink">Daemon<span class="file-path">qwen serve → HTTP</span></span>
+            <span class="badge" style="background:rgba(244,114,182,0.2); color:var(--accent-pink);">serve</span>
+          </div>
+        </div>
+      </div>
+      <div class="arrow-down">▼</div>
+      <!-- Phase 4 -->
+      <div class="flow-row">
+        <span class="box l-cyan">MCP Connect<span class="file-path">mcp-client.ts · async</span></span>
+        <span class="arrow">→</span>
+        <span class="box l-cyan">System Prompt Assembly<span class="file-path">prompts.ts</span></span>
+        <span class="arrow">→</span>
+        <span class="box l-cyan">GeminiClient.initialize()<span class="file-path">client.ts · ~30ms</span></span>
+      </div>
+      <div class="arrow-down">▼</div>
+      <div class="flow-row">
+        <span class="box l-green box-lg">First Render / Ready<span class="file-path">Total cold start: ~200–500ms</span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 3: Agent Core Loop -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig3">
+  <h2>Figure 3</h2>
+  <p class="fig-title">Agent Core Loop — Extended ReAct with recursive continuation paths</p>
+
+  <div class="diagram">
+    <div class="flow-col" style="width:100%;">
+      <div class="flow-row">
+        <span class="box l-purple box-lg">GeminiClient.sendMessage()<span class="file-path">core/client.ts</span></span>
+      </div>
+      <div class="arrow-down">▼ <span class="arrow-label">UserQuery / ToolResult / Steer / Hook</span></div>
+
+      <div class="group" style="width:92%; max-width:850px;">
+        <span class="group-label">Turn Loop (max 100 turns)</span>
+        <div class="flow-col" style="width:100%;">
+          <div class="flow-row">
+            <span class="box l-blue">Turn.run()<span class="file-path">core/turn.ts</span></span>
+            <span class="arrow">→</span>
+            <span class="box l-blue">GeminiChat.sendMessageStream()<span class="file-path">core/geminiChat.ts</span></span>
+            <span class="arrow">→</span>
+            <span class="box l-cyan">LLM API (Gemini)<span class="file-path">generateContentStream</span></span>
+          </div>
+          <div class="arrow-down">▼ <span class="arrow-label">ServerGeminiStreamEvent</span></div>
+          <div class="flow-row" style="gap: 0.5rem;">
+            <span class="box box-sm l-green">Content</span>
+            <span class="box box-sm l-orange">ToolCallRequest</span>
+            <span class="box box-sm l-purple">Thought</span>
+            <span class="box box-sm l-pink">Citation</span>
+            <span class="box box-sm l-yellow">Retry</span>
+            <span class="box box-sm l-red" style="background:rgba(248,113,113,0.12); border-color:var(--accent-red); color:var(--accent-red);">Error</span>
+          </div>
+          <div class="arrow-down">▼ <span class="arrow-label">if ToolCallRequest</span></div>
+          <div class="flow-row">
+            <span class="box l-orange">CoreToolScheduler.execute()<span class="file-path">coreToolScheduler.ts</span></span>
+            <span class="arrow">→</span>
+            <span class="box l-orange">ToolCallResponse</span>
+            <span class="arrow">→</span>
+            <span class="box l-purple">↻ continue loop</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="arrow-down">▼ <span class="arrow-label">loop exit conditions</span></div>
+      <div class="group" style="width:92%; max-width:850px;">
+        <span class="group-label">Recursive Continuation Paths</span>
+        <div class="flow-row" style="justify-content: space-around;">
+          <div class="flow-col">
+            <span class="box box-sm l-pink">Stop Hook<span class="file-path">goalHook.ts</span></span>
+            <span class="arrow-label">blocks finish → re-loop</span>
+          </div>
+          <div class="flow-col">
+            <span class="box box-sm l-indigo">nextSpeaker<span class="file-path">nextSpeakerChecker.ts</span></span>
+            <span class="arrow-label">model requests continuation</span>
+          </div>
+          <div class="flow-col">
+            <span class="box box-sm l-teal">Steer Input<span class="file-path">user mid-turn inject</span></span>
+            <span class="arrow-label">sampling boundary append</span>
+          </div>
+          <div class="flow-col">
+            <span class="box box-sm l-yellow">ModelFallback<span class="file-path">retry → fallback chain</span></span>
+            <span class="arrow-label">capacity error recovery</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 4: Tool Execution Pipeline -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig4">
+  <h2>Figure 4</h2>
+  <p class="fig-title">Tool Execution Pipeline — 7-stage flow with concurrency partitioning</p>
+
+  <div class="diagram">
+    <div class="pipeline">
+      <div class="pipeline-stage l-blue">
+        <span class="stage-num">①</span>
+        <span class="stage-name">Receive</span>
+        <span class="stage-desc">FunctionCall from LLM response</span>
+      </div>
+      <div class="pipeline-stage l-purple">
+        <span class="stage-num">②</span>
+        <span class="stage-name">Validate</span>
+        <span class="stage-desc">Schema check, name migration</span>
+      </div>
+      <div class="pipeline-stage l-orange">
+        <span class="stage-num">③</span>
+        <span class="stage-name">Permission</span>
+        <span class="stage-desc">L3→L4→L5 flow evaluation</span>
+      </div>
+      <div class="pipeline-stage l-pink">
+        <span class="stage-num">④</span>
+        <span class="stage-name">PreHook</span>
+        <span class="stage-desc">firePreToolUseHook()</span>
+      </div>
+      <div class="pipeline-stage l-green">
+        <span class="stage-num">⑤</span>
+        <span class="stage-name">Execute</span>
+        <span class="stage-desc">invocation.execute(params)</span>
+      </div>
+      <div class="pipeline-stage l-cyan">
+        <span class="stage-num">⑥</span>
+        <span class="stage-name">PostHook</span>
+        <span class="stage-desc">firePostToolUseHook()</span>
+      </div>
+      <div class="pipeline-stage l-teal">
+        <span class="stage-num">⑦</span>
+        <span class="stage-name">Return</span>
+        <span class="stage-desc">FunctionResponse → history</span>
+      </div>
+    </div>
+
+    <!-- Concurrency model -->
+    <div style="margin-top: 1.5rem;">
+      <div class="group" style="display:inline-block; margin-right: 1rem;">
+        <span class="group-label" style="color:var(--accent-green);">Parallel Partition (CONCURRENCY_SAFE_KINDS)</span>
+        <div class="flow-row" style="margin-top:0.5rem;">
+          <span class="box box-sm l-green">read_file</span>
+          <span class="box box-sm l-green">glob</span>
+          <span class="box box-sm l-green">grep_search</span>
+          <span class="box box-sm l-green">list_directory</span>
+          <span class="box box-sm l-green">web_fetch</span>
+        </div>
+        <p style="font-size:0.7rem; color:var(--text-dim); margin-top:0.4rem; text-align:center;">Execute concurrently (Promise.all)</p>
+      </div>
+      <div class="group" style="display:inline-block;">
+        <span class="group-label" style="color:var(--accent-red);">Serial Partition (write/mutate)</span>
+        <div class="flow-row" style="margin-top:0.5rem;">
+          <span class="box box-sm" style="background:rgba(248,113,113,0.12); border-color:var(--accent-red); color:var(--accent-red);">edit</span>
+          <span class="box box-sm" style="background:rgba(248,113,113,0.12); border-color:var(--accent-red); color:var(--accent-red);">write_file</span>
+          <span class="box box-sm" style="background:rgba(248,113,113,0.12); border-color:var(--accent-red); color:var(--accent-red);">run_shell_command</span>
+          <span class="box box-sm" style="background:rgba(248,113,113,0.12); border-color:var(--accent-red); color:var(--accent-red);">notebook_edit</span>
+        </div>
+        <p style="font-size:0.7rem; color:var(--text-dim); margin-top:0.4rem; text-align:center;">Execute sequentially (queue)</p>
+      </div>
+    </div>
+
+    <!-- Permission branch -->
+    <div style="margin-top: 1.5rem;">
+      <div class="group">
+        <span class="group-label">Permission Decision Branch (Stage ③)</span>
+        <div class="flow-row" style="margin-top:0.5rem; justify-content: space-around;">
+          <div class="flow-col">
+            <span class="box box-sm l-green">ALLOW</span>
+            <span class="arrow-label">→ proceed to ④</span>
+          </div>
+          <div class="flow-col">
+            <span class="box box-sm l-yellow">ASK</span>
+            <span class="arrow-label">→ user confirmation UI</span>
+          </div>
+          <div class="flow-col">
+            <span class="box box-sm" style="background:rgba(248,113,113,0.12); border-color:var(--accent-red); color:var(--accent-red);">DENY</span>
+            <span class="arrow-label">→ error response to LLM</span>
+          </div>
+          <div class="flow-col">
+            <span class="box box-sm l-purple">YOLO mode</span>
+            <span class="arrow-label">→ bypass all ASK</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 5: Five-Layer Security -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig5">
+  <h2>Figure 5</h2>
+  <p class="fig-title">Five-Layer Defense-in-Depth Security Architecture</p>
+
+  <div class="diagram">
+    <div class="flow-col" style="width:100%; gap: 0.6rem;">
+      <!-- L1 -->
+      <div class="layer-band" style="border-color: var(--accent-blue); background: rgba(56,189,248,0.06);">
+        <h4 style="color: var(--accent-blue);">L1 · Prompt Layer — System Prompt Hardening</h4>
+        <div class="items">
+          <span class="box box-sm l-blue">Safety instructions</span>
+          <span class="box box-sm l-blue">Role boundaries</span>
+          <span class="box box-sm l-blue">Output constraints</span>
+        </div>
+        <p style="font-size:0.7rem; color:var(--text-dim); margin-top:0.4rem;">Threats: social engineering, role hijacking, instruction injection</p>
+      </div>
+      <!-- L2 -->
+      <div class="layer-band" style="border-color: var(--accent-purple); background: rgba(167,139,250,0.06);">
+        <h4 style="color: var(--accent-purple);">L2 · Tool Declaration Layer — Schema &amp; Capability Bounds</h4>
+        <div class="items">
+          <span class="box box-sm l-purple">FunctionDeclaration schema</span>
+          <span class="box box-sm l-purple">Kind classification</span>
+          <span class="box box-sm l-purple">Deferred loading (tool_search)</span>
+        </div>
+        <p style="font-size:0.7rem; color:var(--text-dim); margin-top:0.4rem;">Threats: parameter injection, capability escalation</p>
+      </div>
+      <!-- L3 -->
+      <div class="layer-band" style="border-color: var(--accent-orange); background: rgba(251,146,60,0.06);">
+        <h4 style="color: var(--accent-orange);">L3 · Tool Intrinsic Permission — Default Policy</h4>
+        <div class="items">
+          <span class="box box-sm l-orange">getDefaultPermission()</span>
+          <span class="box box-sm l-orange">requiresUserInteraction()</span>
+          <span class="box box-sm l-orange">permissionAliases</span>
+        </div>
+        <p style="font-size:0.7rem; color:var(--text-dim); margin-top:0.4rem;">Threats: unauthorized file writes, dangerous shell commands</p>
+      </div>
+      <!-- L4 -->
+      <div class="layer-band" style="border-color: var(--accent-pink); background: rgba(244,114,182,0.06);">
+        <h4 style="color: var(--accent-pink);">L4 · PermissionManager Rules — User-Defined Overrides</h4>
+        <div class="items">
+          <span class="box box-sm l-pink">evaluatePermissionRules()</span>
+          <span class="box box-sm l-pink">Allow-list / Deny-list</span>
+          <span class="box box-sm l-pink">Path-conditional rules</span>
+        </div>
+        <p style="font-size:0.7rem; color:var(--text-dim); margin-top:0.4rem;">Threats: scope creep, repeated approval fatigue</p>
+      </div>
+      <!-- L5 -->
+      <div class="layer-band" style="border-color: var(--accent-red); background: rgba(248,113,113,0.06);">
+        <h4 style="color: var(--accent-red);">L5 · Approval Mode &amp; Hooks — Runtime Enforcement</h4>
+        <div class="items">
+          <span class="box box-sm l-security">ApprovalMode (DEFAULT/AUTO_EDIT/YOLO/PLAN)</span>
+          <span class="box box-sm l-security">PreToolUse / PostToolUse hooks</span>
+          <span class="box box-sm l-security">Auto-mode classifier</span>
+        </div>
+        <p style="font-size:0.7rem; color:var(--text-dim); margin-top:0.4rem;">Threats: runtime bypass, hook evasion, denial-state fallback</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-blue); background: rgba(56,189,248,0.3);"></div>L1 Prompt</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-purple); background: rgba(167,139,250,0.3);"></div>L2 Schema</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-orange); background: rgba(251,146,60,0.3);"></div>L3 Intrinsic</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-pink); background: rgba(244,114,182,0.3);"></div>L4 Rules</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-red); background: rgba(248,113,113,0.3);"></div>L5 Runtime</div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 6: Adaptive Context Compression -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig6">
+  <h2>Figure 6</h2>
+  <p class="fig-title">Adaptive Context Compression (ACC) — progressive thresholds and data lifecycle</p>
+
+  <div class="diagram">
+    <!-- Threshold bar -->
+    <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.5rem;">Context Window Utilization Thresholds:</p>
+    <div class="threshold-bar">
+      <div class="threshold-seg" style="width:25%; background:rgba(74,222,128,0.2); color:var(--accent-green);">0–70%<br>Normal</div>
+      <div class="threshold-seg" style="width:15%; background:rgba(56,189,248,0.2); color:var(--accent-blue);">70–80%<br>Micro-compact</div>
+      <div class="threshold-seg" style="width:15%; background:rgba(251,191,36,0.2); color:var(--accent-yellow);">80–85%<br>Warn</div>
+      <div class="threshold-seg" style="width:20%; background:rgba(251,146,60,0.2); color:var(--accent-orange);">85–97%<br>Auto-compact</div>
+      <div class="threshold-seg" style="width:25%; background:rgba(248,113,113,0.2); color:var(--accent-red);">97–100%<br>Hard limit</div>
+    </div>
+
+    <!-- Stages -->
+    <div style="margin-top:1.5rem;">
+      <div class="flow-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+        <div class="flow-col">
+          <span class="box l-green" style="width:100%;">Stage 1: Micro-compact<span class="file-path">microcompact.ts</span></span>
+          <span class="arrow-label">Strip old tool results<br>Trim large outputs<br>~70% threshold</span>
+        </div>
+        <div class="flow-col">
+          <span class="box l-blue" style="width:100%;">Stage 2: Input Slimming<span class="file-path">compactionInputSlimming.ts</span></span>
+          <span class="arrow-label">Remove redundant context<br>Dedup file contents<br>~80% threshold</span>
+        </div>
+        <div class="flow-col">
+          <span class="box l-yellow" style="width:100%;">Stage 3: Warn + Prepare<span class="file-path">chatCompressionService.ts</span></span>
+          <span class="arrow-label">Notify user of pressure<br>Prepare summary prompt<br>WARN_BUFFER = 20k</span>
+        </div>
+        <div class="flow-col">
+          <span class="box l-orange" style="width:100%;">Stage 4: Auto-compact<span class="file-path">sideQuery → summary</span></span>
+          <span class="arrow-label">LLM summarization<br>DEFAULT_PCT = 0.85<br>Max output: 20k tokens</span>
+        </div>
+        <div class="flow-col">
+          <span class="box l-security" style="width:100%;">Stage 5: Hard Limit<span class="file-path">HARD_BUFFER = 3k</span></span>
+          <span class="arrow-label">Force truncation<br>Circuit breaker (3 fails)<br>Session token exceeded</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Data lifecycle -->
+    <div style="margin-top: 1.5rem;">
+      <div class="group">
+        <span class="group-label">Observation Data Lifecycle</span>
+        <div class="flow-row" style="margin-top:0.5rem;">
+          <span class="box box-sm l-green">Active<span class="file-path">full content in history</span></span>
+          <span class="arrow">→</span>
+          <span class="box box-sm l-yellow">Decaying<span class="file-path">tool results trimmed</span></span>
+          <span class="arrow">→</span>
+          <span class="box box-sm l-orange">Summarized<span class="file-path">LLM-compressed</span></span>
+          <span class="arrow">→</span>
+          <span class="box box-sm l-security">Archived<span class="file-path">postCompactAttachments</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 7: Event-Driven System Reminders -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig7">
+  <h2>Figure 7</h2>
+  <p class="fig-title">Event-Driven System Reminder Injection — detectors, thresholds, and injection point</p>
+
+  <div class="diagram">
+    <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 1.5rem; align-items: center;">
+      <!-- Left: Detectors -->
+      <div class="group">
+        <span class="group-label">Event Detectors (8 types)</span>
+        <div class="flow-col" style="gap: 0.4rem; margin-top: 0.5rem; align-items: stretch;">
+          <span class="box box-sm l-blue" style="justify-content:flex-start;">📁 Git Status Change</span>
+          <span class="box box-sm l-purple" style="justify-content:flex-start;">🔧 MCP Tools Delta</span>
+          <span class="box box-sm l-green" style="justify-content:flex-start;">📜 Skills / Commands Delta</span>
+          <span class="box box-sm l-orange" style="justify-content:flex-start;">🤖 Agent Availability</span>
+          <span class="box box-sm l-pink" style="justify-content:flex-start;">📅 Date Change (midnight)</span>
+          <span class="box box-sm l-cyan" style="justify-content:flex-start;">💻 IDE Context Update</span>
+          <span class="box box-sm l-yellow" style="justify-content:flex-start;">🧠 Memory Recall Result</span>
+          <span class="box box-sm l-teal" style="justify-content:flex-start;">📊 Context Usage Stats</span>
+        </div>
+      </div>
+
+      <!-- Center: Arrow -->
+      <div class="flow-col">
+        <span style="font-size: 2rem; color: var(--text-muted);">⟶</span>
+        <span class="arrow-label">&lt;system-reminder&gt;<br>wrapped XML</span>
+      </div>
+
+      <!-- Right: Injection -->
+      <div class="group">
+        <span class="group-label">Injection Point</span>
+        <div class="flow-col" style="gap: 0.6rem; margin-top: 0.5rem;">
+          <span class="box l-purple">Conversation Tail<span class="file-path">appended after last message</span></span>
+          <span class="arrow-down">▼</span>
+          <span class="box l-blue">Role: user<span class="file-path">createUserContent()</span></span>
+          <span class="arrow-down">▼</span>
+          <span class="box l-green">Next LLM Request<span class="file-path">visible to model only</span></span>
+        </div>
+        <div style="margin-top: 0.8rem; padding-top: 0.6rem; border-top: 1px dashed var(--border);">
+          <p style="font-size:0.7rem; color:var(--text-dim);">
+            <strong>Dedup:</strong> announcedSkillReminderKeys Set<br>
+            <strong>Counter:</strong> sessionTurnCount tracking<br>
+            <strong>Threshold:</strong> AUTO_SKILL_THRESHOLD turns
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 8: Memory System -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig8">
+  <h2>Figure 8</h2>
+  <p class="fig-title">Memory System Data Flow — three-tier storage with recall injection</p>
+
+  <div class="diagram">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+      <!-- Left: Storage tiers -->
+      <div>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.8rem;">Three-Tier Storage:</p>
+        <div class="flow-col" style="gap: 0.6rem; align-items: stretch;">
+          <div class="layer-band" style="border-color: var(--accent-blue); background: rgba(56,189,248,0.06);">
+            <h4 style="color: var(--accent-blue); font-size:0.75rem;">User Memory (cross-project)</h4>
+            <span class="file-path">~/.qwen/memories/</span>
+            <div class="items" style="margin-top:0.3rem;">
+              <span class="badge" style="background:rgba(56,189,248,0.15); color:var(--accent-blue);">profile</span>
+              <span class="badge" style="background:rgba(56,189,248,0.15); color:var(--accent-blue);">feedback</span>
+              <span class="badge" style="background:rgba(56,189,248,0.15); color:var(--accent-blue);">preferences</span>
+            </div>
+          </div>
+          <div class="layer-band" style="border-color: var(--accent-green); background: rgba(74,222,128,0.06);">
+            <h4 style="color: var(--accent-green); font-size:0.75rem;">Project Memory (per-repo)</h4>
+            <span class="file-path">~/.qwen/projects/&lt;hash&gt;/memory/</span>
+            <div class="items" style="margin-top:0.3rem;">
+              <span class="badge" style="background:rgba(74,222,128,0.15); color:var(--accent-green);">context</span>
+              <span class="badge" style="background:rgba(74,222,128,0.15); color:var(--accent-green);">decisions</span>
+              <span class="badge" style="background:rgba(74,222,128,0.15); color:var(--accent-green);">references</span>
+            </div>
+          </div>
+          <div class="layer-band" style="border-color: var(--accent-purple); background: rgba(167,139,250,0.06);">
+            <h4 style="color: var(--accent-purple); font-size:0.75rem;">Team Memory (shared)</h4>
+            <span class="file-path">.qwen/team-memory/</span>
+            <div class="items" style="margin-top:0.3rem;">
+              <span class="badge" style="background:rgba(167,139,250,0.15); color:var(--accent-purple);">conventions</span>
+              <span class="badge" style="background:rgba(167,139,250,0.15); color:var(--accent-purple);">policies</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Read/Write paths -->
+      <div>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.8rem;">Data Paths:</p>
+        <div class="group" style="margin-bottom: 1rem;">
+          <span class="group-label" style="color:var(--accent-orange);">Write Path (Extract / Dream)</span>
+          <div class="flow-col" style="gap:0.3rem; margin-top:0.4rem;">
+            <span class="box box-sm l-orange">scheduleExtract()</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-orange">runAutoMemoryExtract()</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-orange">atomicWriteFile() → .md</span>
+          </div>
+        </div>
+        <div class="group">
+          <span class="group-label" style="color:var(--accent-cyan);">Read Path (Recall)</span>
+          <div class="flow-col" style="gap:0.3rem; margin-top:0.4rem;">
+            <span class="box box-sm l-cyan">UserQuery fires prefetch</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-cyan">resolveRelevantAutoMemoryPrompt()</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-cyan">Inject as &lt;system-reminder&gt;</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-green">Consumed at turn boundary</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 9: MCP Integration -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig9">
+  <h2>Figure 9</h2>
+  <p class="fig-title">MCP (Model Context Protocol) Integration Architecture</p>
+
+  <div class="diagram">
+    <div class="flow-col" style="width:100%;">
+      <!-- Main pipeline -->
+      <div class="pipeline">
+        <div class="pipeline-stage l-blue">
+          <span class="stage-num">①</span>
+          <span class="stage-name">Configure</span>
+          <span class="stage-desc">settings.json<br>mcpServers{}</span>
+        </div>
+        <div class="pipeline-stage l-purple">
+          <span class="stage-num">②</span>
+          <span class="stage-name">Connect</span>
+          <span class="stage-desc">stdio / SSE<br>spawn transport</span>
+        </div>
+        <div class="pipeline-stage l-green">
+          <span class="stage-num">③</span>
+          <span class="stage-name">Discover</span>
+          <span class="stage-desc">tools/list<br>resources/list</span>
+        </div>
+        <div class="pipeline-stage l-orange">
+          <span class="stage-num">④</span>
+          <span class="stage-name">Register</span>
+          <span class="stage-desc">DeferredToolSummary<br>→ ToolRegistry</span>
+        </div>
+        <div class="pipeline-stage l-pink">
+          <span class="stage-num">⑤</span>
+          <span class="stage-name">Execute</span>
+          <span class="stage-desc">tools/call<br>via mcp-client</span>
+        </div>
+      </div>
+
+      <!-- Lazy loading + hot reload -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1.5rem; width: 100%;">
+        <div class="group">
+          <span class="group-label" style="color:var(--accent-cyan);">Lazy Loading (Deferred Tools)</span>
+          <div class="flow-col" style="gap:0.4rem; margin-top:0.4rem;">
+            <span class="box box-sm l-cyan">Startup: register names only</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-cyan">Model calls tool_search</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-cyan">Fetch full schema on demand</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-green">Available for invocation</span>
+          </div>
+        </div>
+        <div class="group">
+          <span class="group-label" style="color:var(--accent-yellow);">Hot Reload (SettingsWatcher)</span>
+          <div class="flow-col" style="gap:0.4rem; margin-top:0.4rem;">
+            <span class="box box-sm l-yellow">settings.json modified</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-yellow">Diff mcpServers config</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-orange">Disconnect removed servers</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+            <span class="box box-sm l-green">Connect new → delta reminder</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 10: Sub-Agent & Fork System -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig10">
+  <h2>Figure 10</h2>
+  <p class="fig-title">Sub-Agent &amp; Fork System — isolation models and lifecycle</p>
+
+  <div class="diagram">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+      <!-- Left: Spawn model -->
+      <div class="group">
+        <span class="group-label" style="color:var(--accent-purple);">Agent Spawn (tool: agent)</span>
+        <div class="flow-col" style="gap:0.5rem; margin-top:0.5rem;">
+          <span class="box l-purple box-lg">Main Agent (Parent)<span class="file-path">GeminiClient instance</span></span>
+          <div class="flow-row" style="gap:1.5rem;">
+            <div class="flow-col">
+              <span class="arrow-down">▼ spawn</span>
+              <span class="box box-sm l-blue">Regular SubAgent<span class="file-path">fresh prompt, no history</span></span>
+              <span class="badge" style="background:rgba(56,189,248,0.15); color:var(--accent-blue);">isolation: full</span>
+            </div>
+            <div class="flow-col">
+              <span class="arrow-down">▼ fork</span>
+              <span class="box box-sm l-green">Fork (subagent_type: fork)<span class="file-path">inherits parent context</span></span>
+              <span class="badge" style="background:rgba(74,222,128,0.15); color:var(--accent-green);">fork_turns: N | all</span>
+            </div>
+          </div>
+          <div class="arrow-down">▼</div>
+          <span class="box box-sm l-orange">SubagentManager<span class="file-path">subagents/subagent-manager.ts</span></span>
+        </div>
+      </div>
+
+      <!-- Right: Lifecycle -->
+      <div class="group">
+        <span class="group-label" style="color:var(--accent-orange);">Background Task Lifecycle</span>
+        <div class="flow-col" style="gap:0.4rem; margin-top:0.5rem;">
+          <span class="box box-sm l-green">Launch (run_in_background: true)</span>
+          <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+          <span class="box box-sm l-blue">Running (own GeminiClient)</span>
+          <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+          <span class="box box-sm l-yellow">Completion Notification<span class="file-path">&lt;task-notification&gt;</span></span>
+          <span class="arrow-down" style="font-size:0.9rem;">▼</span>
+          <span class="box box-sm l-purple">Result → Parent Context</span>
+        </div>
+        <div style="margin-top: 1rem; padding-top: 0.6rem; border-top: 1px dashed var(--border);">
+          <p style="font-size:0.7rem; color:var(--text-dim);">
+            <strong>Worktree isolation:</strong> git worktree per agent<br>
+            <strong>Cache sharing:</strong> forks reuse prompt cache<br>
+            <strong>Registry:</strong> BackgroundTaskRegistry tracks all
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Comparison table -->
+    <div style="margin-top: 1.5rem; overflow-x: auto;">
+      <table style="width:100%; border-collapse:collapse; font-size:0.78rem;">
+        <thead>
+          <tr style="border-bottom: 2px solid var(--border);">
+            <th style="padding:0.5rem; text-align:left; color:var(--text-muted);">Property</th>
+            <th style="padding:0.5rem; text-align:center; color:var(--accent-blue);">Regular SubAgent</th>
+            <th style="padding:0.5rem; text-align:center; color:var(--accent-green);">Fork</th>
+            <th style="padding:0.5rem; text-align:center; color:var(--accent-orange);">Sub-session</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom: 1px solid var(--border);">
+            <td style="padding:0.4rem 0.5rem; color:var(--text-muted);">Context</td>
+            <td style="padding:0.4rem 0.5rem; text-align:center;">Fresh prompt only</td>
+            <td style="padding:0.4rem 0.5rem; text-align:center;">Inherits parent (N turns)</td>
+            <td style="padding:0.4rem 0.5rem; text-align:center;">Fully independent</td>
+          </tr>
+          <tr style="border-bottom: 1px solid var(--border);">
+            <td style="padding:0.4rem 0.5rem; color:var(--text-muted);">Cache</td>
+            <td style="padding:0.4rem 0.5rem; text-align:center;">Cold start</td>
+            <td style="padding:0.4rem 0.5rem; text-align:center;">Shared (cheap)</td>
+            <td style="padding:0.4rem 0.5rem; text-align:center;">Cold start</td>
+          </tr>
+          <tr>
+            <td style="padding:0.4rem 0.5rem; color:var(--text-muted);">Use case</td>
+            <td style="padding:0.4rem 0.5rem; text-align:center;">Bounded tasks</td>
+            <td style="padding:0.4rem 0.5rem; text-align:center;">Context-heavy follow-up</td>
+            <td style="padding:0.4rem 0.5rem; text-align:center;">Daemon parallel work</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 11: Config Hierarchy & Hot Reload -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig11">
+  <h2>Figure 11</h2>
+  <p class="fig-title">Configuration Hierarchy &amp; Hot Reload — four-level merge model with SettingsWatcher</p>
+
+  <div class="diagram">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+      <!-- Left: Merge model -->
+      <div>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.8rem;">Four-Level Merge (later overrides earlier):</p>
+        <div class="flow-col" style="gap: 0.5rem; align-items: stretch;">
+          <div class="layer-band" style="border-color: var(--text-dim); background: rgba(100,116,139,0.06); padding: 0.7rem 1rem;">
+            <h4 style="color: var(--text-muted); font-size:0.72rem;">① System Defaults</h4>
+            <span class="file-path">Hardcoded in config.ts</span>
+          </div>
+          <div class="arrow-down" style="font-size:0.9rem;">▼ merge</div>
+          <div class="layer-band" style="border-color: var(--accent-blue); background: rgba(56,189,248,0.06); padding: 0.7rem 1rem;">
+            <h4 style="color: var(--accent-blue); font-size:0.72rem;">② User Global Settings</h4>
+            <span class="file-path">~/.qwen/settings.json</span>
+          </div>
+          <div class="arrow-down" style="font-size:0.9rem;">▼ merge</div>
+          <div class="layer-band" style="border-color: var(--accent-green); background: rgba(74,222,128,0.06); padding: 0.7rem 1rem;">
+            <h4 style="color: var(--accent-green); font-size:0.72rem;">③ Project Settings</h4>
+            <span class="file-path">.qwen/settings.json (repo root)</span>
+          </div>
+          <div class="arrow-down" style="font-size:0.9rem;">▼ merge</div>
+          <div class="layer-band" style="border-color: var(--accent-orange); background: rgba(251,146,60,0.06); padding: 0.7rem 1rem;">
+            <h4 style="color: var(--accent-orange); font-size:0.72rem;">④ CLI Flags / Environment</h4>
+            <span class="file-path">--model, QWEN_* env vars</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Hot reload state machine -->
+      <div>
+        <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.8rem;">SettingsWatcher State Machine:</p>
+        <div class="group">
+          <span class="group-label">Hot Reload Flow</span>
+          <div class="flow-col" style="gap:0.4rem; margin-top:0.5rem;">
+            <span class="box box-sm l-cyan">fs.watch(settings.json)</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼ debounce 300ms</span>
+            <span class="box box-sm l-blue">Parse &amp; validate JSON</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼ diff against current</span>
+            <span class="box box-sm l-purple">Config.merge(newValues)</span>
+            <span class="arrow-down" style="font-size:0.9rem;">▼ emit change events</span>
+            <div class="flow-row" style="gap:0.5rem;">
+              <span class="box box-sm l-orange">MCP reconnect</span>
+              <span class="box box-sm l-green">Tool re-register</span>
+              <span class="box box-sm l-pink">Prompt rebuild</span>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top: 1rem;">
+          <div class="group">
+            <span class="group-label" style="color:var(--accent-yellow);">MCP Reconnect on Change</span>
+            <div class="flow-row" style="margin-top:0.4rem; gap:0.4rem;">
+              <span class="box box-sm l-yellow">Detect server Δ</span>
+              <span class="arrow" style="font-size:0.9rem;">→</span>
+              <span class="box box-sm l-security" style="background:rgba(248,113,113,0.12); border-color:var(--accent-red); color:var(--accent-red);">Disconnect old</span>
+              <span class="arrow" style="font-size:0.9rem;">→</span>
+              <span class="box box-sm l-green">Connect new</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════ -->
+<!-- Figure 12: Multi-Frontend Architecture -->
+<!-- ═══════════════════════════════════════════════════════════ -->
+<section class="figure" id="fig12">
+  <h2>Figure 12</h2>
+  <p class="fig-title">Multi-Frontend Architecture — four modes sharing a common core</p>
+
+  <div class="diagram">
+    <div class="flow-col" style="width:100%;">
+      <!-- Frontends -->
+      <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; width: 100%;">
+        <div class="flow-col">
+          <div class="layer-band" style="border-color: var(--accent-green); background: rgba(74,222,128,0.06); width:100%; text-align:center;">
+            <h4 style="color: var(--accent-green); font-size:0.75rem;">TUI</h4>
+            <div style="font-size:0.7rem; color:var(--text-dim);">
+              Ink + React<br>
+              Interactive prompts<br>
+              Markdown render<br>
+              Approval dialogs
+            </div>
+            <span class="file-path">packages/cli/src/ui/</span>
+          </div>
+        </div>
+        <div class="flow-col">
+          <div class="layer-band" style="border-color: var(--accent-orange); background: rgba(251,146,60,0.06); width:100%; text-align:center;">
+            <h4 style="color: var(--accent-orange); font-size:0.75rem;">Headless</h4>
+            <div style="font-size:0.7rem; color:var(--text-dim);">
+              --print mode<br>
+              JSON/text output<br>
+              No interaction<br>
+              CI/CD friendly
+            </div>
+            <span class="file-path">nonInteractiveMain()</span>
+          </div>
+        </div>
+        <div class="flow-col">
+          <div class="layer-band" style="border-color: var(--accent-pink); background: rgba(244,114,182,0.06); width:100%; text-align:center;">
+            <h4 style="color: var(--accent-pink); font-size:0.75rem;">Daemon</h4>
+            <div style="font-size:0.7rem; color:var(--text-dim);">
+              qwen serve<br>
+              HTTP + WebSocket<br>
+              Multi-session<br>
+              Sub-sessions
+            </div>
+            <span class="file-path">packages/cli/src/daemon/</span>
+          </div>
+        </div>
+        <div class="flow-col">
+          <div class="layer-band" style="border-color: var(--accent-cyan); background: rgba(34,211,238,0.06); width:100%; text-align:center;">
+            <h4 style="color: var(--accent-cyan); font-size:0.75rem;">SDK</h4>
+            <div style="font-size:0.7rem; color:var(--text-dim);">
+              Programmatic API<br>
+              Event streaming<br>
+              Custom UIs<br>
+              Embedding
+            </div>
+            <span class="file-path">packages/sdk/</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Arrows down -->
+      <div class="arrow-down" style="font-size:1.5rem; margin: 0.8rem 0;">▼ ▼ ▼ ▼</div>
+
+      <!-- Shared core -->
+      <div class="group" style="width: 100%;">
+        <span class="group-label" style="color:var(--accent-purple); font-size:0.8rem;">Shared Core (packages/core)</span>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 0.8rem;">
+          <div class="flow-col" style="gap:0.4rem;">
+            <span class="box l-purple" style="width:100%;">Config<span class="file-path">config/config.ts</span></span>
+            <span class="box box-sm l-blue" style="width:100%;">4-level merge</span>
+            <span class="box box-sm l-blue" style="width:100%;">ApprovalMode</span>
+            <span class="box box-sm l-blue" style="width:100%;">Model selection</span>
+          </div>
+          <div class="flow-col" style="gap:0.4rem;">
+            <span class="box l-purple" style="width:100%;">Agent Engine<span class="file-path">core/client.ts</span></span>
+            <span class="box box-sm l-green" style="width:100%;">GeminiClient</span>
+            <span class="box box-sm l-green" style="width:100%;">Turn event loop</span>
+            <span class="box box-sm l-green" style="width:100%;">Compression</span>
+          </div>
+          <div class="flow-col" style="gap:0.4rem;">
+            <span class="box l-purple" style="width:100%;">Tool System<span class="file-path">tools/ + core/coreToolScheduler</span></span>
+            <span class="box box-sm l-orange" style="width:100%;">40+ built-in tools</span>
+            <span class="box box-sm l-orange" style="width:100%;">MCP extension</span>
+            <span class="box box-sm l-orange" style="width:100%;">Permission flow</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom: persistence -->
+      <div class="arrow-down" style="margin: 0.5rem 0;">▼</div>
+      <div class="flow-row">
+        <span class="box box-sm l-persist">File System</span>
+        <span class="box box-sm l-persist">Git</span>
+        <span class="box box-sm l-persist">Memory Store</span>
+        <span class="box box-sm l-persist">Session DB</span>
+        <span class="box box-sm l-persist">Telemetry (OTLP)</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-green); background: rgba(74,222,128,0.3);"></div>TUI</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-orange); background: rgba(251,146,60,0.3);"></div>Headless</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-pink); background: rgba(244,114,182,0.3);"></div>Daemon</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-cyan); background: rgba(34,211,238,0.3);"></div>SDK</div>
+    <div class="legend-item"><div class="legend-dot" style="border-color: var(--accent-purple); background: rgba(167,139,250,0.3);"></div>Shared Core</div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer style="text-align:center; padding: 2rem 0; color: var(--text-dim); font-size: 0.8rem; border-top: 1px solid var(--border); margin-top: 2rem;">
+  <p>Qwen Code Architecture Figures — Generated for Technical Paper</p>
+  <p style="margin-top:0.3rem;">Source: packages/core + packages/cli · Apache-2.0 License</p>
+</footer>
+
+</div>
+</body>
+</html>

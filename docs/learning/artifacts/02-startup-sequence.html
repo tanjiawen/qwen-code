@@ -1,0 +1,182 @@
+<meta charset="UTF-8">
+
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e4e4e7; padding: 24px; line-height: 1.6; }
+h1 { font-size: 1.5rem; margin-bottom: 8px; color: #fff; }
+.subtitle { color: #a1a1aa; margin-bottom: 24px; font-size: 0.9rem; }
+.timeline { position: relative; padding-left: 40px; }
+.timeline::before { content: ''; position: absolute; left: 15px; top: 0; bottom: 0; width: 2px; background: linear-gradient(to bottom, #6366f1, #22c55e, #f59e0b); }
+.phase { margin-bottom: 32px; }
+.phase-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; padding: 4px 12px; border-radius: 4px; display: inline-block; }
+.phase-a .phase-label { background: #312e81; color: #a5b4fc; }
+.phase-b .phase-label { background: #14532d; color: #86efac; }
+.phase-c .phase-label { background: #7c2d12; color: #fdba74; }
+.phase-d .phase-label { background: #4a1d96; color: #d8b4fe; }
+.step { position: relative; background: #1a1b23; border: 1px solid #2e2f3a; border-radius: 10px; padding: 16px 20px; margin-bottom: 12px; transition: all 0.2s; cursor: pointer; }
+.step:hover { border-color: #6366f1; box-shadow: 0 2px 12px rgba(99,102,241,0.1); }
+.step::before { content: ''; position: absolute; left: -33px; top: 20px; width: 12px; height: 12px; border-radius: 50%; background: #6366f1; border: 2px solid #0f1117; }
+.step-title { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; }
+.step-file { font-size: 0.7rem; color: #71717a; font-family: monospace; margin-top: 4px; }
+.step-desc { font-size: 0.8rem; color: #a1a1aa; margin-top: 8px; }
+.step-details { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px solid #2e2f3a; font-size: 0.78rem; color: #d4d4d8; }
+.step.expanded .step-details { display: block; }
+.step-details code { background: #27272a; padding: 1px 5px; border-radius: 3px; font-size: 0.72rem; color: #a78bfa; }
+.badge { font-size: 0.65rem; padding: 2px 6px; border-radius: 3px; font-weight: 500; }
+.badge-fast { background: #14532d; color: #86efac; }
+.badge-slow { background: #7c2d12; color: #fdba74; }
+.badge-async { background: #1e3a5f; color: #93c5fd; }
+.fork-box { background: #1a1b23; border: 1px dashed #4b5563; border-radius: 10px; padding: 16px; margin: 12px 0; }
+.fork-title { font-size: 0.8rem; font-weight: 600; color: #9ca3af; margin-bottom: 8px; }
+.fork-branch { display: flex; gap: 12px; flex-wrap: wrap; }
+.branch { flex: 1; min-width: 200px; background: #27272a; border-radius: 8px; padding: 12px; font-size: 0.78rem; }
+.branch-title { font-weight: 600; margin-bottom: 4px; }
+.note { background: #1e293b; border-left: 3px solid #6366f1; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 24px 0; font-size: 0.82rem; color: #cbd5e1; }
+</style>
+
+<h1>🚀 千问 Code — 启动流程时序图</h1>
+<p class="subtitle">从 <code>qwen</code> 命令到 TUI 渲染的完整启动链路 · 点击步骤展开详情</p>
+
+<div class="note">
+  💡 整个启动过程分为 4 个阶段：<strong>A. Bin Wrapper</strong>（进程启动）→ <strong>B. CLI 路由</strong>（命令分发）→ <strong>C. 初始化</strong>（配置/沙箱/Config）→ <strong>D. 渲染</strong>（TUI 或 Headless）
+</div>
+
+<div class="timeline">
+  <div class="phase phase-a">
+    <div class="phase-label">Phase A — Bin Wrapper (进程启动)</div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-title">① 用户执行 <code>qwen</code> <span class="badge badge-fast">&lt;5ms</span></div>
+      <div class="step-file">scripts/cli-entry.js</div>
+      <div class="step-desc">Shell 脚本 shim → 调用 cli-entry.js（#!/usr/bin/env node）</div>
+      <div class="step-details">
+        <p>standalone 安装时：<code>~/.local/bin/qwen</code> → <code>~/.local/lib/qwen-code/bin/qwen</code> → 选择捆绑 Node → 执行 cli-entry.js</p>
+        <p>npm 全局安装时：直接执行 <code>node_modules/.bin/qwen</code> → cli-entry.js</p>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-title">② 路由判断 + 进程重启 <span class="badge badge-fast">~10ms</span></div>
+      <div class="step-file">scripts/cli-entry.js → isInProcessFastPath()</div>
+      <div class="step-desc">快速路径（serve/mcp/help/version）直接 in-process 执行；其他命令 spawnSync 重启并加 --expose-gc</div>
+      <div class="step-details">
+        <p>• 快速路径：<code>await import(cli.js)</code> 同进程执行，避免 spawn 开销</p>
+        <p>• 默认路径：<code>spawnSync(node, ['--expose-gc', cli.js, ...args])</code></p>
+        <p>• <code>--expose-gc</code> 使 global.gc() 可用，供内存压力监控使用</p>
+        <p>• 设置 <code>QWEN_CODE_CLI</code> 环境变量（子进程调用自身时定位正确 build）</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="phase phase-b">
+    <div class="phase-label">Phase B — CLI 路由 (命令分发)</div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-title">③ runCliEntryPoint() <span class="badge badge-fast">~5ms</span></div>
+      <div class="step-file">packages/cli/index.ts → packages/cli/src/cli.ts</div>
+      <div class="step-desc">注册 uncaughtException 处理器，调用 runCliEntry()</div>
+      <div class="step-details">
+        <p>• 初始化 startup profiler 和 CPU profiler</p>
+        <p>• <code>resolveBootstrapRoute(argv)</code> 判断路由：serve | mcp | help | version | default</p>
+        <p>• 非 default 路由直接处理并返回（不加载完整 Config）</p>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-title">④ import('./gemini.js') → main() <span class="badge badge-slow">~200ms</span></div>
+      <div class="step-file">packages/cli/src/gemini.tsx (1330行)</div>
+      <div class="step-desc">默认路由：动态导入 gemini.tsx 并调用 main()，进入完整启动序列</div>
+      <div class="step-details">
+        <p>动态 import 确保 serve/mcp 快速路径不加载 React/Ink 等重依赖</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="phase phase-c">
+    <div class="phase-label">Phase C — 初始化 (配置/沙箱/Config)</div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-title">⑤ parseArguments() <span class="badge badge-fast">~20ms</span></div>
+      <div class="step-file">packages/cli/src/config/config.ts</div>
+      <div class="step-desc">yargs 解析命令行参数：--model, --prompt, --sandbox, --resume, --output-format 等</div>
+      <div class="step-details">
+        <p>关键参数：<code>-p/--prompt</code>（非交互）、<code>-m/--model</code>、<code>-c/--continue</code>、<code>-r/--resume</code>、<code>--safe-mode</code>、<code>--worktree</code></p>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-title">⑥ loadSettings() <span class="badge badge-fast">~10ms</span></div>
+      <div class="step-file">packages/cli/src/config/settings.ts</div>
+      <div class="step-desc">加载 ~/.qwen/settings.json + 项目级 .qwen/settings.json，合并为 merged 对象</div>
+      <div class="step-details">
+        <p>• 层级：全局 → 项目 → 环境变量 → CLI 参数</p>
+        <p>• 包含：model、theme、tools、security、advanced、ui 等配置段</p>
+        <p>• 损坏检测：JSON 解析失败时自动重置并备份</p>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-title">⑦ 沙箱 / 子进程重启 <span class="badge badge-slow">~500ms</span></div>
+      <div class="step-file">packages/cli/src/utils/sandbox.ts, relaunch.ts</div>
+      <div class="step-desc">如启用沙箱（docker/podman/seatbelt），在沙箱内重启；否则以子进程重启（配置内存上限）</div>
+      <div class="step-details">
+        <p>• <code>loadSandboxConfig()</code> 判断沙箱类型</p>
+        <p>• <code>relaunchAppInChildProcess(memoryArgs)</code> — 设置 --max-old-space-size（总内存50%）</p>
+        <p>• 重启后 <code>process.env.SANDBOX</code> 已设置，跳过此步</p>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-title">⑧ loadCliConfig() <span class="badge badge-slow">~100ms</span></div>
+      <div class="step-file">packages/cli/src/config/config.ts → packages/core/src/config/config.ts</div>
+      <div class="step-desc">构建 Config 对象 — 整个系统的配置中心，持有所有运行时状态</div>
+      <div class="step-details">
+        <p>Config 持有：model 配置、MCP servers、tools registry、hooks、extensions、session ID、approval mode、memory manager 等</p>
+        <p>• <code>config.initialize()</code> 触发 MCP 发现、工具注册</p>
+        <p>• <code>config.waitForMcpReady()</code> 等待 MCP 服务器就绪</p>
+      </div>
+    </div>
+
+    <div class="step" onclick="this.classList.toggle('expanded')">
+      <div class="step-title">⑨ initializeApp() <span class="badge badge-async">async</span></div>
+      <div class="step-file">packages/cli/src/core/initializer.ts</div>
+      <div class="step-desc">初始化 MCP 连接、扩展加载、hooks 注册、IDE 连接（可延迟）</div>
+      <div class="step-details">
+        <p>• MCP 服务器异步连接（progressive availability）</p>
+        <p>• Extension 文件监听启动</p>
+        <p>• Settings 热重载监听启动</p>
+        <p>• LSP 配置监听（如启用）</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="phase phase-d">
+    <div class="phase-label">Phase D — 渲染 (TUI / Headless)</div>
+
+    <div class="fork-box">
+      <div class="fork-title">🔀 分支点：config.isInteractive()</div>
+      <div class="fork-branch">
+        <div class="branch">
+          <div class="branch-title" style="color:#86efac;">交互模式 (TTY)</div>
+          <p>startInteractiveUI() → React/Ink 渲染 AppContainer</p>
+          <p style="margin-top:8px;color:#71717a;">• setRawMode(true) 接管键盘</p>
+          <p style="color:#71717a;">• Kitty 协议检测</p>
+          <p style="color:#71717a;">• 主题自动检测 (OSC 11)</p>
+          <p style="color:#71717a;">• 信号处理器 (Ctrl+C 双击退出)</p>
+        </div>
+        <div class="branch">
+          <div class="branch-title" style="color:#fdba74;">非交互模式 (-p / stdin)</div>
+          <p>runNonInteractive() → 直接执行 prompt → 输出结果 → exit</p>
+          <p style="margin-top:8px;color:#71717a;">• 读取 stdin 管道输入</p>
+          <p style="color:#71717a;">• validateNonInteractiveAuth()</p>
+          <p style="color:#71717a;">• 支持 text/json/stream-json 输出</p>
+          <p style="color:#71717a;">• 完成后 runExitCleanup() + process.exit()</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  📌 <strong>性能关键点：</strong>快速路径（serve/mcp/help）跳过 Phase C/D 全部，仅需 ~15ms。交互模式完整启动约 800ms-1.5s（取决于 MCP 服务器数量）。startup profiler 可通过 <code>QWEN_CODE_PROFILE_STARTUP=1</code> 启用。
+</div>

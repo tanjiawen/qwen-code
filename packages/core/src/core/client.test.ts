@@ -644,6 +644,7 @@ describe('Gemini Client (client.ts)', () => {
       }),
       getFileReadCache: vi.fn().mockReturnValue({
         clear: vi.fn(),
+        getStalePaths: vi.fn().mockResolvedValue([]),
       }),
     } as unknown as Config;
 
@@ -2475,6 +2476,7 @@ describe('Gemini Client (client.ts)', () => {
       clear: clearMock,
       // Returns true = "entry found and disarmed" (the common case).
       markReadEvictedFromHistory: vi.fn().mockReturnValue(true),
+      getStalePaths: vi.fn().mockResolvedValue([]),
     } as unknown as ReturnType<Config['getFileReadCache']>);
     return clearMock;
   }
@@ -2499,6 +2501,7 @@ describe('Gemini Client (client.ts)', () => {
       clear,
       markReadEvictedFromHistory,
       invalidateByPath,
+      getStalePaths: vi.fn().mockResolvedValue([]),
     } as unknown as ReturnType<Config['getFileReadCache']>);
     return { clear, markReadEvictedFromHistory, invalidateByPath };
   }
@@ -11762,6 +11765,7 @@ function makeMockConfigForShutdown(
     }),
     getFileReadCache: vi.fn().mockReturnValue({
       clear: vi.fn(),
+      getStalePaths: vi.fn().mockResolvedValue([]),
     }),
     getExtensionLoader: vi.fn().mockReturnValue(undefined),
     getWorkspaceContext: vi.fn().mockReturnValue(undefined),

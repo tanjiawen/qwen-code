@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   countOccurrences,
+  findClosestMatch,
   maybeAugmentOldStringForDeletion,
   normalizeEditStrings,
 } from './editHelper.js';
@@ -206,5 +207,83 @@ describe('maybeAugmentOldStringForDeletion', () => {
     expect(
       maybeAugmentOldStringForDeletion(file, 'console.log("bye")\n', ''),
     ).toBe('console.log("bye")\n');
+  });
+});
+
+describe('findClosestMatch', () => {
+  const fileContent = [
+    'import { useState } from "react";',
+    '',
+    'function App() {',
+    '  const [count, setCount] = useState(0);',
+    '',
+    '  return (',
+    '    <div>',
+    '      <p>Count: {count}</p>',
+    '      <button onClick={() => setCount(count + 1)}>',
+    '        Increment',
+    '      </button>',
+    '    </div>',
+    '  );',
+    '}',
+    '',
+    'export default App;',
+  ].join('\n');
+
+  it('returns null for empty inputs', () => {
+    expect(findClosestMatch('', 'something')).toBeNull();
+    expect(findClosestMatch(fileContent, '')).toBeNull();
+  });
+
+  it('returns null when target is a single line', () => {
+    expect(findClosestMatch(fileContent, 'import { useState }')).toBeNull();
+  });
+
+  it('finds a close match with trailing whitespace difference', () => {
+    // Target has trailing spaces that file doesn't have
+    const target = [
+      'function App() {  ',
+      '  const [count, setCount] = useState(0);  ',
+      '',
+    ].join('\n');
+    const result = findClosestMatch(fileContent, target);
+    expect(result).not.toBeNull();
+    expect(result!.similarity).toBeGreaterThanOrEqual(0.7);
+    expect(result!.lineStart).toBe(3);
+  });
+
+  it('finds a close match with indentation difference', () => {
+    // Target has different indentation
+    const target = [
+      '    <div>',
+      '      <p>Count: {count}</p>',
+      '      <button onClick={() => setCount(count + 1)}>',
+    ].join('\n');
+    const result = findClosestMatch(fileContent, target);
+    expect(result).not.toBeNull();
+    expect(result!.similarity).toBeGreaterThanOrEqual(0.7);
+    expect(result!.lineStart).toBe(7);
+  });
+
+  it('returns null when nothing is similar enough', () => {
+    const target = [
+      'completely unrelated text here',
+      'nothing like the file content at all',
+      'random words that do not match',
+    ].join('\n');
+    expect(findClosestMatch(fileContent, target)).toBeNull();
+  });
+
+  it('respects custom threshold', () => {
+    const target = [
+      'function App() {',
+      '  const [count, setCount] = useState(999);',
+      '',
+    ].join('\n');
+    // With high threshold, should not match
+    expect(findClosestMatch(fileContent, target, 0.99)).toBeNull();
+    // With low threshold, should match
+    const result = findClosestMatch(fileContent, target, 0.5);
+    expect(result).not.toBeNull();
   });
 });

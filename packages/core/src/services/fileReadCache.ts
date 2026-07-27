@@ -5,6 +5,7 @@
  */
 
 import type { Stats } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { resolve as resolvePath } from 'node:path';
 
 /**
@@ -279,6 +280,26 @@ export class FileReadCache {
       return { state: 'stale', entry };
     }
     return { state: 'fresh', entry };
+  }
+
+  /**
+   * Return the paths of all tracked files whose on-disk content has
+   * drifted from the cached fingerprint. Used by the client to inject a
+   * per-turn system reminder so the model re-reads before editing.
+   */
+  async getStalePaths(): Promise<string[]> {
+    const stale: string[] = [];
+    for (const [, entry] of this.byInode) {
+      try {
+        const stats = await stat(entry.realPath);
+        if (stats.mtimeMs !== entry.mtimeMs || stats.size !== entry.sizeBytes) {
+          stale.push(entry.realPath);
+        }
+      } catch {
+        // File may have been deleted, skip
+      }
+    }
+    return stale;
   }
 
   /**

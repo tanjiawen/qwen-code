@@ -475,3 +475,90 @@ export function extractEditSnippet(
     content: snippetLines.join('\n'),
   };
 }
+
+/* -------------------------------------------------------------------------- */
+/* Fuzzy match fallback                                                       */
+/* -------------------------------------------------------------------------- */
+
+export interface FuzzyMatchResult {
+  lineStart: number;
+  lineEnd: number;
+  content: string;
+  similarity: number;
+}
+
+/**
+ * When exact and normalized matching both fail, attempt a line-level fuzzy
+ * match to provide the LLM with a "did you mean?" suggestion.
+ *
+ * Uses a sliding window of the same line count as the needle, comparing each
+ * window with trimEnd-normalized lines. Returns the best match above the
+ * similarity threshold, or null if nothing is close enough.
+ */
+export function findClosestMatch(
+  fileContent: string,
+  oldString: string,
+  threshold = 0.7,
+): FuzzyMatchResult | null {
+  if (!fileContent || !oldString) return null;
+
+  const fileLines = fileContent.split('\n');
+  const targetLines = oldString.split('\n');
+  const targetLen = targetLines.length;
+
+  // Don't attempt fuzzy match for very large or very small targets
+  if (targetLen < 2 || targetLen > 100) return null;
+  if (fileLines.length < targetLen) return null;
+
+  const normalizedTarget = targetLines.map((l) => l.trimEnd());
+
+  let bestScore = 0;
+  let bestStart = -1;
+
+  for (let i = 0; i <= fileLines.length - targetLen; i++) {
+    let matchScore = 0;
+    for (let j = 0; j < targetLen; j++) {
+      const fileLine = fileLines[i + j].trimEnd();
+      const targetLine = normalizedTarget[j];
+      if (fileLine === targetLine) {
+        matchScore += 1;
+      } else if (fileLine.trim() === targetLine.trim()) {
+        // Only indentation differs
+        matchScore += 0.8;
+      } else {
+        // Partial line similarity (simple character overlap)
+        const overlap = lineCharOverlap(fileLine, targetLine);
+        if (overlap > 0.6) matchScore += overlap * 0.6;
+      }
+    }
+    const score = matchScore / targetLen;
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = i;
+    }
+  }
+
+  if (bestScore >= threshold && bestStart >= 0) {
+    return {
+      lineStart: bestStart + 1,
+      lineEnd: bestStart + targetLen,
+      content: fileLines.slice(bestStart, bestStart + targetLen).join('\n'),
+      similarity: bestScore,
+    };
+  }
+  return null;
+}
+
+/** Simple character-level overlap ratio between two strings. */
+function lineCharOverlap(a: string, b: string): number {
+  if (a.length === 0 && b.length === 0) return 1;
+  if (a.length === 0 || b.length === 0) return 0;
+  const maxLen = Math.max(a.length, b.length);
+  // Use longest common subsequence approximation via character set overlap
+  const setA = new Set(a);
+  let common = 0;
+  for (const ch of b) {
+    if (setA.has(ch)) common++;
+  }
+  return common / maxLen;
+}

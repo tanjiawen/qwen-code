@@ -116,6 +116,16 @@ function canonicalizeForHash(value: unknown): unknown {
 }
 
 /**
+ * Result of a semantic constraint check. Warnings are non-blocking
+ * advisories; errors halt the turn like existing loop detectors.
+ */
+export interface SemanticConstraintResult {
+  level: 'warning' | 'error';
+  loopType: LoopType;
+  message: string;
+}
+
+/**
  * Service for detecting and preventing infinite loops in AI responses.
  * Monitors tool call repetitions and content sentence repetitions.
  */
@@ -193,6 +203,15 @@ export class LoopDetectionService {
   private capKeyCounts = new Map<string, number>();
   private capMaxKeyRepeat = 0;
 
+  // Semantic constraint tracking: files read during this turn, keyed by
+  // file path with the tool-call sequence number as value.
+  private recentReadFiles = new Map<string, number>();
+  // Monotonic counter for tool-call ordering within a turn.
+  private toolCallSequence = 0;
+  // Non-blocking warnings from semantic constraint checks. Cleared each
+  // time a new ToolCallRequest is processed.
+  private semanticWarnings: SemanticConstraintResult[] = [];
+
   // Loop type of the most recent firing. Bubbled up through the
   // LoopDetected event so callers (non-interactive CLI, telemetry) can tell
   // the user which detector actually fired.
@@ -212,6 +231,14 @@ export class LoopDetectionService {
 
   getConsecutiveToolCallCount(): number {
     return this.toolCallRepetitionCount;
+  }
+
+  /**
+   * Returns non-blocking semantic constraint warnings accumulated during the
+   * most recent ToolCallRequest check. Cleared on each new ToolCallRequest.
+   */
+  getSemanticWarnings(): readonly SemanticConstraintResult[] {
+    return this.semanticWarnings;
   }
 
   /**
@@ -275,6 +302,23 @@ export class LoopDetectionService {
 
         this.loopDetected =
           globalDup || alternating || readFileLoop || actionStagnation;
+
+        // Semantic constraint checks (non-blocking warnings + blocking errors)
+        this.semanticWarnings = [];
+        this.trackReadFile(event.value);
+        const semanticResults = this.checkSemanticConstraints(event.value);
+        for (const result of semanticResults) {
+          if (result.level === 'error') {
+            this.lastLoopType = result.loopType;
+            logLoopDetected(
+              this.config,
+              new LoopDetectedEvent(result.loopType, this.promptId),
+            );
+            this.loopDetected = true;
+          } else {
+            this.semanticWarnings.push(result);
+          }
+        }
         break;
       }
       case GeminiEventType.Retry: {
@@ -958,6 +1002,142 @@ export class LoopDetectionService {
     return true;
   }
 
+  // --- Semantic constraint detectors (opt-in, heuristic tier) ---
+
+  private static readonly EDIT_TOOL_NAMES: ReadonlySet<string> = new Set([
+    'edit',
+    'write_file',
+  ]);
+
+  /**
+   * Records read_file calls so later edit/write_file calls can be checked
+   * for a prior read.
+   */
+  private trackReadFile(toolCall: { name: string; args: object }): void {
+    this.toolCallSequence++;
+    if (toolCall.name !== 'read_file') {
+      return;
+    }
+    const filePath = (toolCall.args as { file_path?: unknown }).file_path;
+    if (typeof filePath === 'string') {
+      this.recentReadFiles.set(filePath, this.toolCallSequence);
+    }
+  }
+
+  /**
+   * Runs all semantic constraint checks and returns their results.
+   */
+  private checkSemanticConstraints(toolCall: {
+    name: string;
+    args: object;
+  }): SemanticConstraintResult[] {
+    const results: SemanticConstraintResult[] = [];
+    const editWithoutRead = this.checkEditWithoutRecentRead(toolCall);
+    if (editWithoutRead) results.push(editWithoutRead);
+    const redundantRead = this.checkRedundantRead(toolCall);
+    if (redundantRead) results.push(redundantRead);
+    const writeThenEdit = this.checkWriteThenEdit(toolCall);
+    if (writeThenEdit) results.push(writeThenEdit);
+    return results;
+  }
+
+  /**
+   * 2.1: If the current tool call is edit or write_file, warn when the
+   * target file has not been read earlier in this turn.
+   */
+  private checkEditWithoutRecentRead(toolCall: {
+    name: string;
+    args: object;
+  }): SemanticConstraintResult | null {
+    if (!LoopDetectionService.EDIT_TOOL_NAMES.has(toolCall.name)) {
+      return null;
+    }
+    const filePath = (toolCall.args as { file_path?: unknown }).file_path;
+    if (typeof filePath !== 'string') {
+      return null;
+    }
+    if (this.recentReadFiles.has(filePath)) {
+      return null;
+    }
+    return {
+      level: 'warning',
+      loopType: LoopType.EDIT_WITHOUT_READ,
+      message: `File "${filePath}" is being edited without a prior read_file in this turn. Consider reading the file first to understand its current content.`,
+    };
+  }
+
+  /**
+   * 2.2: If the current tool call is read_file, warn when the same file
+   * (identical args) was already read within the last 5 tool calls.
+   */
+  private checkRedundantRead(toolCall: {
+    name: string;
+    args: object;
+  }): SemanticConstraintResult | null {
+    if (toolCall.name !== 'read_file') {
+      return null;
+    }
+    const filePath = (toolCall.args as { file_path?: unknown }).file_path;
+    if (typeof filePath !== 'string') {
+      return null;
+    }
+    // recentToolCalls already includes the current call (pushed by
+    // trackToolCall). Check the 5 entries before it.
+    const history = this.recentToolCalls;
+    const start = Math.max(0, history.length - 6);
+    const end = history.length - 1; // exclude current call
+    for (let i = start; i < end; i++) {
+      const call = history[i];
+      if (call === undefined) continue;
+      if (call.name !== 'read_file') continue;
+      const prevPath = (call.args as { file_path?: unknown }).file_path;
+      if (prevPath === filePath) {
+        return {
+          level: 'warning',
+          loopType: LoopType.REDUNDANT_READ,
+          message: `File "${filePath}" was already read recently and has not changed. Redundant read detected.`,
+        };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 2.3: If the current tool call is edit, block when the same file was
+   * written via write_file within the last 3 tool calls.
+   */
+  private checkWriteThenEdit(toolCall: {
+    name: string;
+    args: object;
+  }): SemanticConstraintResult | null {
+    if (toolCall.name !== 'edit') {
+      return null;
+    }
+    const filePath = (toolCall.args as { file_path?: unknown }).file_path;
+    if (typeof filePath !== 'string') {
+      return null;
+    }
+    // recentToolCalls already includes the current call. Check the 3
+    // entries before it.
+    const history = this.recentToolCalls;
+    const start = Math.max(0, history.length - 4);
+    const end = history.length - 1; // exclude current call
+    for (let i = start; i < end; i++) {
+      const call = history[i];
+      if (call === undefined) continue;
+      if (call.name !== 'write_file') continue;
+      const prevPath = (call.args as { file_path?: unknown }).file_path;
+      if (prevPath === filePath) {
+        return {
+          level: 'error',
+          loopType: LoopType.WRITE_THEN_EDIT,
+          message: `File "${filePath}" was just written via write_file and is now being edited. Use write_file with the final content instead of write + edit.`,
+        };
+      }
+    }
+    return null;
+  }
+
   /**
    * Resets all loop detection state.
    */
@@ -980,6 +1160,9 @@ export class LoopDetectionService {
     this.turnToolCallTotalCommitted = 0;
     this.capKeyCounts.clear();
     this.capMaxKeyRepeat = 0;
+    this.recentReadFiles.clear();
+    this.toolCallSequence = 0;
+    this.semanticWarnings = [];
   }
 
   private resetToolCallCount(): void {

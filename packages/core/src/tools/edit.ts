@@ -52,6 +52,7 @@ import {
   extractEditSnippet,
   maybeAugmentOldStringForDeletion,
   normalizeEditStrings,
+  findClosestMatch,
 } from '../utils/editHelper.js';
 
 const debugLogger = createDebugLogger('EDIT_PRIOR_READ');
@@ -296,9 +297,27 @@ class EditToolInvocation implements ToolInvocation<EditToolParams, ToolResult> {
           type: ToolErrorType.ATTEMPT_TO_CREATE_EXISTING_FILE,
         };
       } else if (occurrences === 0) {
+        const fuzzyMatch = findClosestMatch(currentContent, finalOldString);
+        const fuzzyHint = fuzzyMatch
+          ? ` A similar block was found at lines ${fuzzyMatch.lineStart}-${fuzzyMatch.lineEnd} (${(fuzzyMatch.similarity * 100).toFixed(0)}% similar). Did you mean to use this exact text?\n\`\`\`\n${fuzzyMatch.content}\n\`\`\``
+          : '';
+        let staleHint = '';
+        if (!this.config.getFileReadCacheDisabled()) {
+          try {
+            const currentStats = await fs.promises.stat(params.file_path);
+            const checkResult = this.config
+              .getFileReadCache()
+              .check(currentStats);
+            if (checkResult.state === 'stale') {
+              staleHint = ` ⚠️ This file was modified since you last read it (cached mtime: ${checkResult.entry.mtimeMs}, current mtime: ${currentStats.mtimeMs}). Please use ${ReadFileTool.Name} to get the latest content before editing.`;
+            }
+          } catch {
+            // Best-effort: skip stale check if stat fails
+          }
+        }
         error = {
-          display: `Failed to edit, could not find the string to replace.`,
-          raw: `Failed to edit, 0 occurrences found for old_string in ${params.file_path}. No edits made. The exact text in old_string was not found. Ensure you're not escaping content incorrectly and check whitespace, indentation, and context. Use ${ReadFileTool.Name} tool to verify.`,
+          display: `Failed to edit, could not find the string to replace.${fuzzyMatch ? ` A similar block was found at lines ${fuzzyMatch.lineStart}-${fuzzyMatch.lineEnd}.` : ''}`,
+          raw: `Failed to edit, 0 occurrences found for old_string in ${params.file_path}. No edits made. The exact text in old_string was not found. Ensure you're not escaping content incorrectly and check whitespace, indentation, and context. Use ${ReadFileTool.Name} tool to verify.${fuzzyHint}${staleHint}`,
           type: ToolErrorType.EDIT_NO_OCCURRENCE_FOUND,
         };
       } else if (!replaceAll && occurrences > 1) {

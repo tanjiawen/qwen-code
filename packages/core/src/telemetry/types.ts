@@ -453,6 +453,12 @@ export enum LoopType {
   TURN_TOOL_CALL_CAP = 'turn_tool_call_cap',
   /** The same tool repeatedly failed schema validation with fresh tool-call ids. */
   INVALID_TOOL_PARAMS_STAGNATION = 'invalid_tool_params_stagnation',
+  /** An edit/write_file was issued without a prior read_file on the target. */
+  EDIT_WITHOUT_READ = 'edit_without_read',
+  /** The same file was read again with identical args while unchanged. */
+  REDUNDANT_READ = 'redundant_read',
+  /** An edit was issued on a file that was just written via write_file. */
+  WRITE_THEN_EDIT = 'write_then_edit',
 }
 
 export class LoopDetectedEvent implements BaseTelemetryEvent {

@@ -66,6 +66,7 @@ import {
 
 // Services
 import { LoopDetectionService } from '../services/loopDetectionService.js';
+import { CorrectionMemory } from '../services/correction-memory.js';
 import { CommitAttributionService } from '../services/commitAttribution.js';
 
 // Tools
@@ -253,6 +254,7 @@ export class GeminiClient {
   private readonly settledSteerInputs = new WeakSet<SteerInput>();
 
   private readonly loopDetector: LoopDetectionService;
+  private readonly correctionMemory = new CorrectionMemory();
   private lastPromptId: string | undefined = undefined;
   private lastSentIdeContext: IdeContext | undefined;
   private forceFullIdeContext = true;
@@ -2453,6 +2455,46 @@ export class GeminiClient {
             );
             this.lastInjectedDate = today;
           }
+
+          // Correction memory: detect user negation/correction patterns
+          const userText =
+            typeof request === 'string'
+              ? request
+              : Array.isArray(request)
+                ? request
+                    .filter(
+                      (p): p is { text: string } =>
+                        typeof p === 'object' && p !== null && 'text' in p,
+                    )
+                    .map((p) => p.text)
+                    .join(' ')
+                : '';
+          if (userText) {
+            this.correctionMemory.processUserMessage(userText);
+          }
+          this.correctionMemory.tick();
+        }
+
+        // File change awareness
+        const stalePaths = await this.config.getFileReadCache().getStalePaths();
+        if (stalePaths.length > 0) {
+          const fileList = stalePaths
+            .slice(0, 10)
+            .map((p) => `  - ${p}`)
+            .join('\n');
+          const overflow =
+            stalePaths.length > 10
+              ? `\n  ... and ${stalePaths.length - 10} more`
+              : '';
+          systemReminders.push(
+            `<system-reminder>\nThe following files have been modified externally since you last read them:\n${fileList}${overflow}\nIf you need to edit any of these files, you MUST call read_file first to get the latest content. Editing based on stale content will likely fail.\n</system-reminder>`,
+          );
+        }
+
+        // Correction memory: inject active user corrections as constraints
+        const correctionReminder = this.correctionMemory.compileReminder();
+        if (correctionReminder) {
+          systemReminders.push(correctionReminder);
         }
 
         // add plan mode system reminder if approval mode is plan

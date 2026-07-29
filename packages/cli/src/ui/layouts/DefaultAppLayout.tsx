@@ -19,6 +19,7 @@ import { AgentChatView } from '../components/agent-view/AgentChatView.js';
 import { AgentComposer } from '../components/agent-view/AgentComposer.js';
 import { LiveAgentPanel } from '../components/background-view/LiveAgentPanel.js';
 import { getLiveAgentPanelVpMaxRows } from '../components/background-view/liveAgentPanelVisibility.js';
+import { ProgressPanel } from '../components/ProgressPanel.js';
 import { useUIState } from '../contexts/UIStateContext.js';
 import { useUIActions } from '../contexts/UIActionsContext.js';
 import { useAgentViewState } from '../contexts/AgentViewContext.js';
@@ -105,6 +106,9 @@ export const DefaultAppLayout: React.FC = () => {
                     width={stickyTodoWidth}
                     maxVisibleItems={stickyTodoMaxVisibleItems}
                   />
+                )}
+                {uiState.streamingState === StreamingState.Responding && (
+                  <ProgressPanel />
                 )}
                 {uiState.btwItem && (
                   <Box marginX={2} width={uiState.mainAreaWidth}>

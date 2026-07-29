@@ -69,6 +69,7 @@ import {
   renderAvailableSkillsBlock,
   type AvailableSkillEntry,
 } from '../tools/skill-utils.js';
+import type { SkillConfig } from '../skills/types.js';
 import { escapeSystemReminderTags } from '../utils/xml.js';
 import { unescapePath, PATH_ARG_KEYS } from '../utils/paths.js';
 import type { MemoryPressureMonitor } from '../services/memoryPressureMonitor.js';
@@ -4464,6 +4465,27 @@ export class CoreToolScheduler {
                 );
               }
             }
+
+            try {
+              const allSkills = await skillManager.listSkills();
+              const activatedSet = new Set(activatedSkills);
+              for (const skill of allSkills) {
+                if (
+                  activatedSet.has(skill.name) &&
+                  (skill.blueprint || skill.constraints?.length)
+                ) {
+                  const constraintText = compileSkillConstraints(skill);
+                  if (constraintText) {
+                    reminderBlocks.push(constraintText);
+                  }
+                }
+              }
+            } catch (error) {
+              debugLogger.warn(
+                'coreToolScheduler: compileSkillConstraints failed',
+                error,
+              );
+            }
           }
 
           if (reminderBlocks.length > 0) {
@@ -5392,4 +5414,26 @@ export class CoreToolScheduler {
       }
     }
   }
+}
+
+function compileSkillConstraints(skill: SkillConfig): string {
+  const parts: string[] = [];
+  if (skill.blueprint) {
+    parts.push('## Execution Blueprint (follow this step order)');
+    skill.blueprint.steps.forEach((step, i) => {
+      const marker = step.skippable ? '[optional]' : '[required]';
+      parts.push(`${i + 1}. ${marker} ${step.description}`);
+      if (step.requires) parts.push(`   Prerequisite: ${step.requires}`);
+    });
+    if (skill.blueprint.completionCheck) {
+      parts.push(`\nCompletion check: ${skill.blueprint.completionCheck}`);
+    }
+  }
+  if (skill.constraints?.length) {
+    parts.push('\n## Compositional Constraints (violations cause errors)');
+    for (const c of skill.constraints) {
+      parts.push(`- [${c.type}] ${c.description}`);
+    }
+  }
+  return parts.join('\n');
 }

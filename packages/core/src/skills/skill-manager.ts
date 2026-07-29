@@ -12,6 +12,8 @@ import { watch as watchFs, type FSWatcher } from 'chokidar';
 import { resolveBundleDir } from '../utils/bundlePaths.js';
 import { parse as parseYaml } from '../utils/yaml-parser.js';
 import type {
+  CompositionalConstraint,
+  ProceduralBlueprint,
   SkillConfig,
   SkillLevel,
   ListSkillsOptions,
@@ -741,6 +743,13 @@ export class SkillManager {
         debugLogger.warn(msg),
       );
 
+      const blueprint = frontmatter['blueprint'] as
+        | ProceduralBlueprint
+        | undefined;
+      const constraints = frontmatter['constraints'] as
+        | CompositionalConstraint[]
+        | undefined;
+
       const config: SkillConfig = {
         name,
         description,
@@ -757,6 +766,8 @@ export class SkillManager {
         userInvocable,
         paths,
         priority,
+        blueprint,
+        constraints,
       };
 
       // Validate the parsed configuration

@@ -1,4 +1,6 @@
 import {
+  type CompositionalConstraint,
+  type ProceduralBlueprint,
   type SkillConfig,
   type SkillValidationResult,
   parseAllowedToolsField,
@@ -165,6 +167,11 @@ export function parseSkillContent(
   const paths = parsePathsField(frontmatter);
   const priority = parsePriorityField(frontmatter, filePath);
 
+  const blueprint = frontmatter['blueprint'] as ProceduralBlueprint | undefined;
+  const constraints = frontmatter['constraints'] as
+    | CompositionalConstraint[]
+    | undefined;
+
   const config: SkillConfig = {
     name,
     description,
@@ -194,6 +201,8 @@ export function parseSkillContent(
     userInvocable,
     paths,
     priority,
+    blueprint,
+    constraints,
   };
 
   // Validate the parsed configuration

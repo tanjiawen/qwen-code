@@ -134,6 +134,40 @@ export interface SkillConfig {
    * SKILL.md. When omitted, treated as 0; ties fall back to alphabetical order.
    */
   priority?: number;
+
+  /** Procedural blueprint: encodes the correct step order for this skill */
+  blueprint?: ProceduralBlueprint;
+
+  /** Compositional constraints: encodes inter-step dependency and exclusion rules */
+  constraints?: CompositionalConstraint[];
+}
+
+export interface ProceduralBlueprint {
+  steps: BlueprintStep[];
+  strictOrder?: boolean;
+  completionCheck?: string;
+}
+
+export interface BlueprintStep {
+  description: string;
+  tool?: string;
+  requires?: string;
+  skippable?: boolean;
+  skipCondition?: string;
+}
+
+export interface CompositionalConstraint {
+  type: 'ordering' | 'exclusion' | 'mandatory' | 'redundancy';
+  description: string;
+  ordering?: { before: string; after: string; sameFile?: boolean };
+  exclusion?: { tools: string[]; sameFile?: boolean };
+  mandatory?: { tool: string; condition: string };
+  redundancy?: {
+    tool: string;
+    sameArgs: boolean;
+    window: number;
+    message: string;
+  };
 }
 
 /**

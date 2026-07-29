@@ -22,6 +22,9 @@
 
 // Core types and interfaces
 export type {
+  BlueprintStep,
+  CompositionalConstraint,
+  ProceduralBlueprint,
   SkillConfig,
   SkillLevel,
   SkillValidationResult,

@@ -157,6 +157,12 @@ const LOOP_TYPE_LABELS: Record<LoopType, string> = {
     'the turn reached the per-turn tool-call limit',
   [LoopType.INVALID_TOOL_PARAMS_STAGNATION]:
     'the model repeatedly sent invalid tool parameters without correcting them',
+  [LoopType.EDIT_WITHOUT_READ]:
+    'the model attempted to edit a file without reading it recently',
+  [LoopType.REDUNDANT_READ]:
+    'the model re-read a file that has not changed since the last read',
+  [LoopType.WRITE_THEN_EDIT]:
+    'the model attempted to edit a file immediately after overwriting it with write_file',
 };
 
 function formatLoopDetectedMessage(loopType: LoopType | undefined): string {

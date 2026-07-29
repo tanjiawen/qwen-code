@@ -55,6 +55,10 @@ vi.mock('../components/StickyTodoList.js', () => ({
   StickyTodoList: () => <Text>StickyTodoList</Text>,
 }));
 
+vi.mock('../components/ProgressPanel.js', () => ({
+  ProgressPanel: () => <Text>ProgressPanel</Text>,
+}));
+
 vi.mock('../components/agent-view/AgentTabBar.js', () => ({
   AgentTabBar: () => <Text>AgentTabBar</Text>,
 }));

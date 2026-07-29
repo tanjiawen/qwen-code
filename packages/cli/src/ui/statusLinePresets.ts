@@ -152,6 +152,7 @@ export const STATUS_LINE_PRESET_ITEMS: readonly StatusLinePresetItem[] = [
     id: 'qwen-version',
     label: 'qwen-version',
     description: 'Qwen Code application version',
+    defaultSelected: true,
   },
   {
     id: 'context-window-size',

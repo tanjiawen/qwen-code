@@ -1120,7 +1120,7 @@ export async function runNonInteractive(
 
       const processToolCallBatch = async (
         batchRequests: ToolCallRequestInfo[],
-        setModelOverride: (override: string | undefined) => void,
+        setModelOverride: (override: string | undefined) => boolean,
       ): Promise<ToolCallBatchResult> => {
         const responseByRequest = new Map<
           ToolCallRequestInfo,
@@ -1322,6 +1322,10 @@ export async function runNonInteractive(
             abortController.signal,
             {
               recordToolResult: false,
+              onToolResultFullTurnModel: (model) => {
+                if (inlineModelOverrideActive) return false;
+                return setModelOverride(model);
+              },
               outputUpdateHandler,
               onAllToolCallsComplete: async (completedCalls) => {
                 for (const call of completedCalls) {
@@ -1780,9 +1784,12 @@ export async function runNonInteractive(
             responseParts: toolResponseParts,
             repeatedDuplicateProviderToolCall,
           } = await processToolCallBatch(toolCallRequests, (override) => {
-            if (!inlineModelOverrideActive) {
-              modelOverride = override;
+            if (inlineModelOverrideActive) return false;
+            if (modelOverride?.endsWith('\0') && modelOverride !== override) {
+              return false;
             }
+            modelOverride = override;
+            return true;
           });
 
           if (structuredSubmission !== undefined) {
@@ -2024,7 +2031,14 @@ export async function runNonInteractive(
                 } = await processToolCallBatch(
                   itemToolCallRequests,
                   (override) => {
+                    if (
+                      itemModelOverride?.endsWith('\0') &&
+                      itemModelOverride !== override
+                    ) {
+                      return false;
+                    }
                     itemModelOverride = override;
+                    return true;
                   },
                 );
 

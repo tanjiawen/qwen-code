@@ -5,6 +5,88 @@
 
 ---
 
+## v0.21.2-study.3 (2026-07-30)
+
+**主题：/dashboard 会话仪表盘 + ProgressPanel 增强**
+
+### 背景
+
+Agent 长时间运行时缺少全局视角——token 消耗、工具成功率、hook 拦截情况
+散落在各处，无法一屏掌握。新增 `/dashboard` 命令提供快照式全景面板，
+同时增强流式 ProgressPanel 的实时信息密度。
+
+### 变更内容
+
+#### 1. Hook 执行日志（Core 层新基础设施）
+
+- **新增** `packages/core/src/hooks/hook-execution-log.ts`
+  - 环形缓冲区（最多 50 条），记录每次 hook 触发的事件名、耗时、
+    hook 数量、是否 block
+  - 提供 `recordHookExecution`、`getRecentHookExecutions`、
+    `getHookAggregateStats`、`clearHookExecutionLog` 四个函数
+- **修改** `packages/core/src/hooks/hookEventHandler.ts`
+  - 在 `processHookEvent` 末尾调用 `recordHookExecution()` 写入日志
+- **修改** `packages/core/src/hooks/index.ts`、`packages/core/src/index.ts`
+  - 导出读取/清除接口（不暴露写入接口给外部）
+
+#### 2. /dashboard 命令
+
+- **新增** `packages/cli/src/ui/commands/dashboard-command.ts`
+  - `buildSnapshot()` 从 `session.stats.metrics` 聚合 token、延迟、
+    工具调用、文件行数，加上 hook 统计，组装 `DashboardSnapshot`
+  - 费用估算：$3/M input + $15/M output（粗略前沿模型定价）
+- **新增** `packages/cli/src/ui/components/views/DashboardView.tsx`
+  - 五个面板：⛽ Token Budget（进度条 + 明细）、📊 Performance
+    （延迟/吞吐/成功率）、🔧 Tools（top5 + 文件行数）、💰 Cost、
+    🪝 Hooks（按事件分类 + 最近 5 条）
+- **修改** `packages/cli/src/ui/types.ts`
+  - 新增 `DashboardSnapshot` 接口、`HistoryItemDashboard` 类型、
+    `MessageType.DASHBOARD` 枚举值
+- **修改** `packages/cli/src/services/BuiltinCommandLoader.ts`
+  - 注册 `dashboardCommand`
+- **修改** `packages/cli/src/ui/components/HistoryItemDisplay.tsx`
+  - `type === 'dashboard'` 时渲染 `<DashboardView>`
+- **修改** `packages/cli/src/ui/utils/historyUtils.ts`
+  - `isSyntheticHistoryItem` 加入 `dashboard` case
+
+#### 3. ProgressPanel 增强
+
+- **修改** `packages/cli/src/ui/components/ProgressPanel.tsx`
+  - 新增 token 进度条（绿→黄→红，60%/80% 阈值）
+  - 新增吞吐量显示（output tokens / elapsed seconds）
+  - 新增 hook 状态行（触发数 + blocked 数）
+  - 布局改为 header（标题 + 耗时右对齐）+ 分区展示
+
+### 验证结果
+
+| 检查项                                 | 结果        |
+| -------------------------------------- | ----------- |
+| core hookEventHandler.test.ts（135）   | ✅ 全部通过 |
+| cli historyUtils.test.ts（20）         | ✅ 全部通过 |
+| cli HistoryItemDisplay.test.tsx（32）  | ✅ 全部通过 |
+| cli BuiltinCommandLoader.test.ts（12） | ✅ 全部通过 |
+| `npm run typecheck`（全包）            | ✅ 通过     |
+| ESLint pre-commit                      | ✅ 通过     |
+
+### 涉及文件
+
+```
+packages/core/src/hooks/hook-execution-log.ts               (新增)
+packages/cli/src/ui/commands/dashboard-command.ts            (新增)
+packages/cli/src/ui/components/views/DashboardView.tsx       (新增)
+packages/core/src/hooks/hookEventHandler.ts                  (修改)
+packages/core/src/hooks/index.ts                             (修改)
+packages/core/src/index.ts                                   (修改)
+packages/cli/src/services/BuiltinCommandLoader.ts            (修改)
+packages/cli/src/ui/types.ts                                 (修改)
+packages/cli/src/ui/components/HistoryItemDisplay.tsx         (修改)
+packages/cli/src/ui/components/ProgressPanel.tsx             (修改)
+packages/cli/src/ui/utils/historyUtils.ts                    (修改)
+LOCAL_CHANGELOG.md                                           (更新)
+```
+
+---
+
 ## v0.21.2-study.2 (2026-07-29)
 
 **主题：真实性约束 Hook——不允许胡编乱造**

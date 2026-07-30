@@ -5,6 +5,89 @@
 
 ---
 
+## v0.21.2-study.4 (2026-07-30)
+
+**主题：Flight Deck 数据层——让仪表盘显示真实数据**
+
+### 背景
+
+study.3 搭好了 `/dashboard` 快照面板，并把流式 ProgressPanel 改造成
+"Agent Flight Deck" 三栏驾驶舱 UI。但 UI 只是空壳：事件时间线、每日成本、
+系统健康这几块仪表没有接上任何数据源，运行时永远显示 `awaiting events...`
+和默认值。本次补齐数据管线，把全部五类 flight 事件和成本 / 延迟 / 健康
+指标接入真实遥测流。
+
+### 变更内容
+
+#### 1. flight-deck 数据层模块（Core 层新基础设施）
+
+- **新增** `packages/core/src/telemetry/flight-deck.ts`
+  - 事件时间线：环形缓冲（最多 50 条），记录 tool_call / thinking /
+    user_input / task_complete / error 五类事件
+  - 延迟百分位：保留最近 100 个样本，计算 p50 / p95 / p99
+  - 每日成本：持久化到 `~/.qwen/daily-cost.json`，按天累计
+  - 系统健康：rate limit / 重试次数 / API 连接 / 磁盘状态
+  - `estimateCostUsd()`：集中费率（$3/M input + $15/M output），供遥测
+    与面板共用，避免两处硬编码漂移
+- **新增** `packages/core/src/telemetry/flight-deck.test.ts`
+  - 覆盖环形缓冲、百分位、系统健康、费率估算（14 例）
+
+#### 2. 遥测汇聚点接入（UiTelemetryService）
+
+- **修改** `packages/core/src/telemetry/uiTelemetry.ts`
+  - api_response：记录成本、thinking 事件（thoughts_token_count > 0），
+    标记 API 已连接并重置重试 / 限流
+  - api_error：记录 error 事件，标记断连、重试 +1，429 视为限流 100%
+  - tool_call：记录 tool_call 事件（失败的工具记为 error）
+- **修改** `packages/core/src/telemetry/uiTelemetry.test.ts`
+  - mock flight-deck 避免触碰真实 home 目录，并断言接线（新增 4 例）
+
+#### 3. 日志汇聚点接入（loggers）
+
+- **修改** `packages/core/src/telemetry/loggers.ts`
+  - `logUserPrompt`：记录 user_input 事件，用 `isInternalPromptId` 过滤
+    suggestion / forked / side-query 等内部 prompt
+  - `logConversationFinishedEvent`：记录 task_complete 事件
+  - 两处均置于函数顶部、telemetry SDK 守卫之前，未开 OTLP 也能记录
+- **修改** `packages/core/src/telemetry/loggers.test.ts`
+  - 用 flight-deck 真实读取函数断言接线（新增 3 例）
+
+#### 4. 面板修正与导出
+
+- **修改** `packages/cli/src/ui/components/ProgressPanel.tsx`
+  - 改用共享的 `estimateCostUsd()` 计算会话成本
+  - 修复每日成本重复计算：`recordCost` 已按响应把本会话累计进当日文件，
+    `getDailyCost()` 已含本会话，故不再额外叠加 sessionCost
+- **修改** `packages/core/src/telemetry/index.ts`
+  - 导出 flight-deck 的读取 / 写入接口与 `estimateCostUsd`
+
+### 验证结果
+
+| 检查项                            | 结果        |
+| --------------------------------- | ----------- |
+| core flight-deck.test.ts（14）    | ✅ 全部通过 |
+| core uiTelemetry.test.ts（51）    | ✅ 全部通过 |
+| core loggers.test.ts（69）        | ✅ 全部通过 |
+| `npm run typecheck`（core + cli） | ✅ 通过     |
+| ESLint                            | ✅ 通过     |
+| Prettier                          | ✅ 已格式化 |
+
+### 涉及文件
+
+```
+packages/core/src/telemetry/flight-deck.ts          (新增)
+packages/core/src/telemetry/flight-deck.test.ts     (新增)
+packages/core/src/telemetry/uiTelemetry.ts          (修改)
+packages/core/src/telemetry/uiTelemetry.test.ts     (修改)
+packages/core/src/telemetry/loggers.ts              (修改)
+packages/core/src/telemetry/loggers.test.ts         (修改)
+packages/core/src/telemetry/index.ts                (修改)
+packages/cli/src/ui/components/ProgressPanel.tsx    (修改)
+LOCAL_CHANGELOG.md                                  (更新)
+```
+
+---
+
 ## v0.21.2-study.3 (2026-07-30)
 
 **主题：/dashboard 会话仪表盘 + ProgressPanel 增强**

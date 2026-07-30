@@ -631,6 +631,15 @@ export {
 } from './hooks/stopHookCap.js';
 export { type StopFailureErrorType } from './hooks/types.js';
 export { buildContextUsage } from './hooks/context-usage.js';
+export {
+  getRecentHookExecutions,
+  getHookAggregateStats,
+  clearHookExecutionLog,
+} from './hooks/hook-execution-log.js';
+export type {
+  HookExecutionRecord,
+  HookAggregateStats,
+} from './hooks/hook-execution-log.js';
 
 // ============================================================================
 // Goals (/goal command runtime)

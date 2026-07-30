@@ -61,6 +61,7 @@ import { createDebugLogger } from '../utils/debugLogger.js';
 import { logHookCall } from '../telemetry/loggers.js';
 import { HookCallEvent } from '../telemetry/types.js';
 import type { CronJob } from '../services/cronScheduler.js';
+import { recordHookExecution } from './hook-execution-log.js';
 
 const debugLogger = createDebugLogger('TRUSTED_HOOKS');
 
@@ -872,6 +873,14 @@ export class HookEventHandler {
 
       // Log hook execution for telemetry
       this.logHookExecution(eventName, input, results, aggregated);
+
+      recordHookExecution({
+        event: eventName,
+        timestamp: Date.now(),
+        durationMs: aggregated.totalDuration,
+        hookCount: results.length,
+        blocked: aggregated.finalOutput?.decision === 'block',
+      });
 
       return aggregated;
     } catch (error) {

@@ -466,6 +466,54 @@ export type HistoryItemContextUsage = HistoryItemBase & {
   showDetails?: boolean;
 };
 
+export type HistoryItemDashboard = HistoryItemBase & {
+  type: 'dashboard';
+  snapshot: DashboardSnapshot;
+};
+
+export interface DashboardSnapshot {
+  sessionStartTime: number;
+  elapsedSeconds: number;
+  tokens: {
+    prompt: number;
+    candidates: number;
+    total: number;
+    cached: number;
+    contextWindowSize: number;
+  };
+  performance: {
+    avgLatencyMs: number;
+    throughputTokensPerSec: number;
+    toolSuccessRate: number;
+    totalRequests: number;
+  };
+  tools: {
+    totalCalls: number;
+    totalSuccess: number;
+    totalFail: number;
+    topTools: Array<{ name: string; count: number }>;
+  };
+  files: {
+    linesAdded: number;
+    linesRemoved: number;
+  };
+  hooks: {
+    totalFired: number;
+    totalBlocked: number;
+    byEvent: Record<string, { count: number; blocked: number }>;
+    recent: Array<{
+      event: string;
+      timestamp: number;
+      durationMs: number;
+      hookCount: number;
+      blocked: boolean;
+    }>;
+  };
+  cost: {
+    estimatedSessionUsd: number;
+  };
+}
+
 /**
  * Arena agent completion card data.
  */
@@ -663,6 +711,7 @@ export type HistoryItemWithoutId =
   | HistoryItemSkillsList
   | HistoryItemMcpStatus
   | HistoryItemContextUsage
+  | HistoryItemDashboard
   | HistoryItemArenaAgentComplete
   | HistoryItemArenaSessionComplete
   | HistoryItemInsightProgress
@@ -712,6 +761,7 @@ export enum MessageType {
   SKILLS_LIST = 'skills_list',
   MCP_STATUS = 'mcp_status',
   CONTEXT_USAGE = 'context_usage',
+  DASHBOARD = 'dashboard',
   ARENA_AGENT_COMPLETE = 'arena_agent_complete',
   ARENA_SESSION_COMPLETE = 'arena_session_complete',
   INSIGHT_PROGRESS = 'insight_progress',

@@ -44,3 +44,15 @@ export type { HookRegistryEntry } from './hookRegistry.js';
 export { HooksConfigSource as ConfigSource } from './types.js';
 export type { AggregatedHookResult } from './hookAggregator.js';
 export type { HookEventContext } from './hookPlanner.js';
+
+// Export hook execution log (dashboard support)
+export {
+  recordHookExecution,
+  getRecentHookExecutions,
+  getHookAggregateStats,
+  clearHookExecutionLog,
+} from './hook-execution-log.js';
+export type {
+  HookExecutionRecord,
+  HookAggregateStats,
+} from './hook-execution-log.js';

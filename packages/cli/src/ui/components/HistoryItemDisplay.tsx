@@ -52,6 +52,7 @@ import { SkillsList } from './views/SkillsList.js';
 import { ToolsList } from './views/ToolsList.js';
 import { McpStatus } from './views/McpStatus.js';
 import { ContextUsage } from './views/ContextUsage.js';
+import { DashboardView } from './views/DashboardView.js';
 import { DoctorReport } from './views/DoctorReport.js';
 import { ArenaAgentCard, ArenaSessionCard } from './arena/ArenaCards.js';
 import { InsightProgressMessage } from './messages/InsightProgressMessage.js';
@@ -445,6 +446,9 @@ const HistoryItemDisplayComponent: React.FC<HistoryItemDisplayProps> = ({
           isEstimated={itemForDisplay.isEstimated}
           showDetails={itemForDisplay.showDetails}
         />
+      )}
+      {itemForDisplay.type === 'dashboard' && (
+        <DashboardView snapshot={itemForDisplay.snapshot} />
       )}
       {itemForDisplay.type === 'doctor' && (
         <DoctorReport

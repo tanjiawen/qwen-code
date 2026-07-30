@@ -5,6 +5,34 @@
 
 ---
 
+## v0.21.2-study.7 (2026-07-31)
+
+**主题：Session Snapshot——退出时真正生成 LLM 会话摘要**
+
+### 背景
+
+study.6 落地了快照数据层和 `generateSnapshotSummary()`，但退出写入时
+`summary` 字段仍硬编码为 `null`——LLM 摘要能力实现了却没有接进退出流程，
+恢复快照时永远看不到摘要。本次把它真正接通。
+
+### 变更内容
+
+#### 1. 退出摘要生成（CLI 层）
+
+- **修改** `packages/cli/src/ui/AppContainer.tsx`
+  - quit handler 在 `runExitCleanup()` 之前调用 `generateSnapshotSummary`
+    （经 `runSideQuery` 走 LLM）。之所以放在 cleanup 前，是因为 cleanup
+    每个函数有 2 秒上限，对一次 LLM 往返太紧
+  - 用 `AbortController` 做 3 秒超时保护
+  - 新增 `snapshotSummaryRef` 保存结果；cleanup 写快照时从 ref 读取，
+    取代原来硬编码的 `null`
+  - 全程 best-effort：任何失败（超时 / 无模型 / 异常）摘要保持 `null`，
+    不阻塞退出
+  - 将 `sessionStats` 补进 imperative-handle 的 `useMemo` 依赖数组
+    （退出处理函数读取了它，修复 ESLint exhaustive-deps 告警）
+
+---
+
 ## v0.21.2-study.6 (2026-07-31)
 
 **主题：Session Snapshot——退出保存工作区快照，启动自动恢复**

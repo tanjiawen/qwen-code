@@ -5,6 +5,63 @@
 
 ---
 
+## v0.21.2-study.5 (2026-07-30)
+
+**主题：Progress Panel 重写——中文双列状态面板 + 生命周期状态机**
+
+### 背景
+
+study.4 补齐了 Flight Deck 数据层，但 UI 仍是英文三栏航空仪表盘隐喻，
+信息密度低且缺乏对 agent 运行阶段的感知。本次将 ProgressPanel 整体重写
+为中文双列布局，引入生命周期状态机和三种洞察视图，并将数据聚合下沉到
+core 层的纯函数选择器。
+
+### 变更内容
+
+#### 1. 数据选择器（Core 层）
+
+- **新增** `packages/core/src/telemetry/live-snapshot.ts`
+  - `selectLiveSnapshot()`：纯函数，将散落在 flight-deck / uiTelemetry
+    里的指标聚合为结构化 `LiveSnapshot`（上下文、令牌、模型、子代理、
+    工具、延迟、费用、健康、事件）
+  - 引入 `MetricProvenance`（measured / estimated / proxy），UI 可标注
+    数据来源，避免把估算当实测
+- **新增** `packages/core/src/telemetry/live-snapshot.test.ts`
+- **修改** `packages/core/src/telemetry/index.ts`：re-export 新模块
+
+#### 2. UI 派生逻辑（CLI 层）
+
+- **新增** `packages/cli/src/ui/utils/progress-insights.ts`
+  - 思考链 `buildThinkingChain()`：从 history + pending 串出
+    🧠思考 → 🔧动作 → 💡发现 → 📝记忆 有序步骤
+  - 系统记忆面板 `buildMemoryPanel()`：记忆文件 token 占用、近期读写
+  - 类知识图谱 `buildKnowledgeGraph()`：文件 × 工具关联统计
+  - 生命周期推导 `derivePhase()` / `resolveTerminalPhase()`：
+    starting → running → waiting → stalled → completed / interrupted / broke
+  - 中文工具动词映射（40+ 条）
+- **新增** `packages/cli/src/ui/utils/progress-insights.test.ts`
+
+#### 3. ProgressPanel 组件重写
+
+- **重写** `packages/cli/src/ui/components/ProgressPanel.tsx`
+  - 布局：英文三栏 → 中文双列（左列指标 + 右列洞察）
+  - 右列 [M] 切换：思考链 / 系统记忆 / 知识图谱
+  - 常驻 L0 状态条：收起时仍显示一行关键指标
+  - 生命周期徽章：【启动中】【进行中】【等待确认】【停滞】【已完成】【已中断】【已跳出】
+  - 数据溯源标记：~ 估算 · ≈ 间接信号
+  - 快捷键：[T] 展开/收起、[M] 切换右列、[D] 明细
+  - 全面中文化
+
+#### 4. 布局变更
+
+- **修改** `packages/cli/src/ui/layouts/DefaultAppLayout.tsx`
+  - ProgressPanel 从"仅 Responding 时挂载"改为始终挂载
+  - 回合结束后折叠为终态状态条
+- **修改** `packages/cli/src/ui/layouts/DefaultAppLayout.test.tsx`
+  - 新增 2 个测试用例验证始终挂载行为
+
+---
+
 ## v0.21.2-study.4 (2026-07-30)
 
 **主题：Flight Deck 数据层——让仪表盘显示真实数据**

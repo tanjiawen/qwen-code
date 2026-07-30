@@ -750,6 +750,31 @@ export async function main() {
     markAcpStartup('configConstructionEnd');
     profileCheckpoint('after_load_cli_config');
 
+    // Restore last session snapshot into system context (silent auto-restore).
+    {
+      const {
+        readLastSnapshot,
+        isSnapshotRecent,
+        formatSnapshotForPrompt,
+        DEFAULT_SNAPSHOT_CONFIG,
+      } = await import('@qwen-code/qwen-code-core');
+      const snapshotCfg =
+        (settings.merged as Record<string, unknown>)?.['sessionSnapshot'] ??
+        DEFAULT_SNAPSHOT_CONFIG;
+      const { enabled, maxAgeHours } = {
+        ...DEFAULT_SNAPSHOT_CONFIG,
+        ...(snapshotCfg as typeof DEFAULT_SNAPSHOT_CONFIG),
+      };
+      if (enabled) {
+        const snapshotPath = config.storage.getLastSnapshotPath();
+        const snapshot = readLastSnapshot(snapshotPath);
+        if (snapshot && isSnapshotRecent(snapshot, maxAgeHours)) {
+          config.setSessionSnapshotContext(formatSnapshotForPrompt(snapshot));
+          config.setSessionSnapshotRestored(true);
+        }
+      }
+    }
+
     // Subscribe the running Config to settings changes so MCP servers
     // reconnect / disconnect / restart without a session restart (#3696,
     // sub-task 3). Skipped in bare mode (no watcher).

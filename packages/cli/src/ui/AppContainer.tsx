@@ -675,6 +675,8 @@ export const AppContainer = (props: AppContainerProps) => {
     worktreeSession?.worktreePath ?? config.getTargetDir(),
   );
   const [showWorktreeExitDialog, setShowWorktreeExitDialog] = useState(false);
+  const snapshotTodosRef = useRef<TodoItem[]>([]);
+  const snapshotLastPromptRef = useRef('');
   // P7-trigger: true while the current turn was steered toward the Workflow
   // tool by the `workflow` keyword (drives the Footer indicator). Set in
   // `handleFinalSubmit`, cleared when the turn returns to idle (effect below).
@@ -886,6 +888,87 @@ export const AppContainer = (props: AppContainerProps) => {
     registerCleanup(async () => {
       const ideClient = await IdeClient.getInstance();
       await ideClient.disconnect();
+    });
+
+    // Write session snapshot on exit for next-startup restore.
+    registerCleanup(async () => {
+      try {
+        const { writeSnapshot } = await import('@qwen-code/qwen-code-core');
+        const { execSync } = await import('node:child_process');
+        const targetDir = config.getTargetDir();
+
+        let branch = '';
+        let lastCommit = '';
+        let dirtyFiles = 0;
+        try {
+          branch = execSync('git rev-parse --abbrev-ref HEAD', {
+            cwd: targetDir,
+            encoding: 'utf-8',
+            timeout: 2000,
+          }).trim();
+          lastCommit = execSync('git log -1 --format="%h %s"', {
+            cwd: targetDir,
+            encoding: 'utf-8',
+            timeout: 2000,
+          })
+            .trim()
+            .slice(0, 80);
+          const status = execSync('git status --porcelain', {
+            cwd: targetDir,
+            encoding: 'utf-8',
+            timeout: 2000,
+          });
+          dirtyFiles = status.split('\n').filter(Boolean).length;
+        } catch {
+          // Not a git repo or git unavailable — leave defaults.
+        }
+
+        const fileHistory = config.getFileHistoryService();
+        const modifiedFiles = fileHistory
+          ? [
+              ...new Set(
+                fileHistory
+                  .getSnapshots()
+                  .flatMap((s) => Object.keys(s.trackedFileBackups)),
+              ),
+            ]
+          : [];
+
+        const metrics = sessionStats.metrics;
+        let totalTokens = 0;
+        for (const m of Object.values(metrics.models)) {
+          totalTokens += m.tokens.total;
+        }
+
+        const snapshot = {
+          version: 1 as const,
+          sessionId: sessionStats.sessionId,
+          timestamp: new Date().toISOString(),
+          projectRoot: targetDir,
+          git: { branch, lastCommit, dirtyFiles },
+          task: {
+            todos: snapshotTodosRef.current.map((t) => ({
+              content: t.content,
+              status: t.status,
+            })),
+            lastUserPrompt: snapshotLastPromptRef.current.slice(0, 200),
+          },
+          files: { modified: modifiedFiles.slice(0, 20) },
+          metrics: {
+            turnCount: sessionStats.promptCount,
+            totalTokens,
+            elapsedSeconds: Math.floor(
+              (Date.now() - sessionStats.sessionStartTime.getTime()) / 1000,
+            ),
+            toolCalls: metrics.tools.totalCalls,
+          },
+          summary: null,
+        };
+
+        writeSnapshot(config.storage.getLastSnapshotPath(), snapshot);
+      } catch (err) {
+        debugLogger.debug('Session snapshot write failed:', err);
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
@@ -2246,6 +2329,7 @@ export const AppContainer = (props: AppContainerProps) => {
         submittedPrompt?: string;
       },
     ) => {
+      snapshotLastPromptRef.current = submittedValue;
       const consumesComposerState = options !== undefined;
       const restoredSubmission = consumesComposerState
         ? restoredSubmissionRef.current
@@ -2566,6 +2650,9 @@ export const AppContainer = (props: AppContainerProps) => {
     [historyManager.history, pendingHistoryItems],
   );
   const stickyTodos = useStableStickyTodos(rawStickyTodos);
+  useEffect(() => {
+    snapshotTodosRef.current = stickyTodos ?? [];
+  }, [stickyTodos]);
   const hasExecutingTool = isToolExecuting(pendingHistoryItems);
   const hasPendingCompression = isCompressionPending(pendingHistoryItems);
 

@@ -984,7 +984,12 @@ export class GeminiClient {
     return assembleSystemPrompt({
       ...stableLayers,
       gitStatus: this.getCachedGitStatus(),
-      autoMemory: this.config.getAutoMemoryPrompt(),
+      autoMemory: [
+        this.config.getAutoMemoryPrompt(),
+        this.config.getSessionSnapshotContext(),
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
     });
   }
 
@@ -3858,7 +3863,12 @@ export class GeminiClient {
         ? assembleSystemPrompt({
             base: getCustomSystemPrompt(generationConfig.systemInstruction),
             contextFiles: this.config.getUserMemory(),
-            autoMemory: this.config.getAutoMemoryPrompt(),
+            autoMemory: [
+              this.config.getAutoMemoryPrompt(),
+              this.config.getSessionSnapshotContext(),
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
           })
         : this.getMainSessionSystemInstruction();
 

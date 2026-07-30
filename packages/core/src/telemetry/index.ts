@@ -268,3 +268,12 @@ export type {
   LatencyPercentiles,
   SystemHealth,
 } from './flight-deck.js';
+export { selectLiveSnapshot } from './live-snapshot.js';
+export type {
+  LiveSnapshot,
+  LiveSnapshotInput,
+  MetricProvenance,
+  ModelSlice,
+  SubagentSlice,
+  ToolSlice,
+} from './live-snapshot.js';

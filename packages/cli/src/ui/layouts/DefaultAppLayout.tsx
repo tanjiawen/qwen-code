@@ -107,9 +107,13 @@ export const DefaultAppLayout: React.FC = () => {
                     maxVisibleItems={stickyTodoMaxVisibleItems}
                   />
                 )}
-                {uiState.streamingState === StreamingState.Responding && (
-                  <ProgressPanel />
-                )}
+                {/*
+                  ProgressPanel is always mounted: it renders the full
+                  two-column deck while Responding and collapses to a
+                  persistent one-line lifecycle status bar (showing the
+                  terminal 已完成/已中断/已跳出 state) once the turn ends.
+                */}
+                <ProgressPanel />
                 {uiState.btwItem && (
                   <Box marginX={2} width={uiState.mainAreaWidth}>
                     <BtwMessage

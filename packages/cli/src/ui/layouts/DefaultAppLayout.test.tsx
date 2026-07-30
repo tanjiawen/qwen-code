@@ -264,6 +264,33 @@ describe('DefaultAppLayout', () => {
     expect(output).toContain('Composer');
   });
 
+  it('renders the progress panel while responding', () => {
+    mockedUseAgentViewState.mockReturnValue({
+      activeView: 'main',
+      agents: new Map(),
+    });
+
+    const { lastFrame } = renderLayout(baseUIState);
+
+    const output = lastFrame() ?? '';
+    expect(output).toContain('ProgressPanel');
+  });
+
+  it('keeps the progress panel mounted when the agent is idle', () => {
+    mockedUseAgentViewState.mockReturnValue({
+      activeView: 'main',
+      agents: new Map(),
+    });
+
+    const { lastFrame } = renderLayout({
+      ...baseUIState,
+      streamingState: StreamingState.Idle,
+    });
+
+    const output = lastFrame() ?? '';
+    expect(output).toContain('ProgressPanel');
+  });
+
   it('does not render sticky todo list when feedback dialog is open', () => {
     mockedUseAgentViewState.mockReturnValue({
       activeView: 'main',

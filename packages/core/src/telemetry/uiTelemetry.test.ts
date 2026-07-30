@@ -23,6 +23,29 @@ import type {
 import { ToolErrorType } from '../tools/tool-error.js';
 import { ToolConfirmationOutcome } from '../tools/tools.js';
 import { MockTool } from '../test-utils/mock-tool.js';
+import {
+  recordFlightEvent,
+  recordCost,
+  updateSystemHealth,
+} from './flight-deck.js';
+
+// flight-deck persists daily cost to the real home directory, so mock it to
+// keep these unit tests filesystem-free and to assert the wiring below.
+vi.mock('./flight-deck.js', () => ({
+  recordLatencySample: vi.fn(),
+  recordFlightEvent: vi.fn(),
+  recordCost: vi.fn(),
+  updateSystemHealth: vi.fn(),
+  getSystemHealth: vi.fn(() => ({
+    rateLimitPercent: 0,
+    retryCount: 0,
+    apiConnected: true,
+    diskOk: true,
+  })),
+  estimateCostUsd: vi.fn(
+    (input: number, output: number) => (input * 3 + output * 15) / 1_000_000,
+  ),
+}));
 
 const createFakeCompletedToolCall = (
   name: string,
@@ -119,6 +142,79 @@ describe('UiTelemetryService', () => {
 
   beforeEach(() => {
     service = new UiTelemetryService();
+  });
+
+  describe('flight-deck wiring', () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    const apiResponseEvent = (overrides: Partial<ApiResponseEvent> = {}) =>
+      ({
+        'event.name': EVENT_API_RESPONSE,
+        model: 'gemini-2.5-pro',
+        duration_ms: 500,
+        input_token_count: 10,
+        output_token_count: 20,
+        total_token_count: 30,
+        cached_content_token_count: 5,
+        thoughts_token_count: 0,
+        ...overrides,
+      }) as ApiResponseEvent & { 'event.name': typeof EVENT_API_RESPONSE };
+
+    it('records cost and marks the API connected on a response', () => {
+      service.addEvent(apiResponseEvent());
+
+      expect(recordCost).toHaveBeenCalledOnce();
+      expect(recordCost).toHaveBeenCalledWith((10 * 3 + 20 * 15) / 1_000_000);
+      expect(updateSystemHealth).toHaveBeenCalledWith({
+        apiConnected: true,
+        retryCount: 0,
+        rateLimitPercent: 0,
+      });
+    });
+
+    it('records a thinking flight event only when thoughts are present', () => {
+      service.addEvent(apiResponseEvent({ thoughts_token_count: 0 }));
+      expect(recordFlightEvent).not.toHaveBeenCalled();
+
+      service.addEvent(apiResponseEvent({ thoughts_token_count: 4 }));
+      expect(recordFlightEvent).toHaveBeenCalledOnce();
+      expect(recordFlightEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'thinking' }),
+      );
+    });
+
+    it('records an error flight event and bumps health on a 429', () => {
+      service.addEvent({
+        'event.name': EVENT_API_ERROR,
+        model: 'gemini-2.5-pro',
+        duration_ms: 100,
+        error_message: 'Request failed with status 429',
+        status_code: 429,
+      } as ApiErrorEvent & { 'event.name': typeof EVENT_API_ERROR });
+
+      expect(recordFlightEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'error' }),
+      );
+      expect(updateSystemHealth).toHaveBeenCalledWith({
+        apiConnected: false,
+        retryCount: 1,
+        rateLimitPercent: 100,
+      });
+    });
+
+    it('records a tool_call flight event for tool calls', () => {
+      const toolCall = createFakeCompletedToolCall('read_file', true, 100);
+      service.addEvent({
+        ...structuredClone(new ToolCallEvent(toolCall)),
+        'event.name': EVENT_TOOL_CALL,
+      } as ToolCallEvent & { 'event.name': typeof EVENT_TOOL_CALL });
+
+      expect(recordFlightEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'tool_call', label: 'read_file' }),
+      );
+    });
   });
 
   it('should have correct initial metrics', () => {

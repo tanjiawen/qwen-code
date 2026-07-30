@@ -248,3 +248,23 @@ export {
 } from './detailed-span-attributes.js';
 export { getTraceContext, formatTraceparent } from './trace-context.js';
 export type { TraceContext } from './trace-context.js';
+export {
+  recordFlightEvent,
+  getRecentFlightEvents,
+  clearFlightEvents,
+  recordLatencySample,
+  getLatencyPercentiles,
+  clearLatencySamples,
+  recordCost,
+  getDailyCost,
+  estimateCostUsd,
+  updateSystemHealth,
+  getSystemHealth,
+  resetFlightDeck,
+} from './flight-deck.js';
+export type {
+  FlightEvent,
+  FlightEventType,
+  LatencyPercentiles,
+  SystemHealth,
+} from './flight-deck.js';

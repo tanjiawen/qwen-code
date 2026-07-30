@@ -19,6 +19,14 @@ import type {
 } from './types.js';
 import { MAIN_SOURCE } from '../utils/subagentNameContext.js';
 import { isInternalPromptId } from '../utils/internalPromptIds.js';
+import {
+  recordLatencySample,
+  recordFlightEvent,
+  recordCost,
+  updateSystemHealth,
+  getSystemHealth,
+  estimateCostUsd,
+} from './flight-deck.js';
 
 export { MAIN_SOURCE } from '../utils/subagentNameContext.js';
 
@@ -336,6 +344,24 @@ export class UiTelemetryService extends EventEmitter {
       bucket.tokens.thoughts += event.thoughts_token_count;
     }
 
+    recordLatencySample(event.duration_ms);
+    recordCost(
+      estimateCostUsd(event.input_token_count, event.output_token_count),
+    );
+    if (event.thoughts_token_count > 0) {
+      recordFlightEvent({
+        type: 'thinking',
+        label: 'thinking',
+        timestamp: Date.now(),
+        durationMs: event.duration_ms,
+      });
+    }
+    updateSystemHealth({
+      apiConnected: true,
+      retryCount: 0,
+      rateLimitPercent: 0,
+    });
+
     if (
       event.ttft_ms === undefined ||
       !Number.isFinite(event.ttft_ms) ||
@@ -376,12 +402,34 @@ export class UiTelemetryService extends EventEmitter {
       bucket.api.totalErrors++;
       bucket.api.totalLatencyMs += event.duration_ms;
     }
+
+    recordFlightEvent({
+      type: 'error',
+      label: event.error_message,
+      timestamp: Date.now(),
+      durationMs: event.duration_ms,
+    });
+    // A 429 means the rate limit is currently exhausted; treat it as 100%
+    // until the next successful response resets it.
+    const rateLimited = Number(event.status_code) === 429;
+    updateSystemHealth({
+      apiConnected: false,
+      retryCount: getSystemHealth().retryCount + 1,
+      ...(rateLimited ? { rateLimitPercent: 100 } : {}),
+    });
   }
 
   #accumulateToolCall(metrics: SessionMetrics, event: ToolCallEvent): void {
     const { tools, files } = metrics;
     tools.totalCalls++;
     tools.totalDurationMs += event.duration_ms;
+
+    recordFlightEvent({
+      type: event.status === 'error' ? 'error' : 'tool_call',
+      label: event.function_name,
+      timestamp: Date.now(),
+      durationMs: event.duration_ms,
+    });
 
     if (event.success) {
       tools.totalSuccess++;

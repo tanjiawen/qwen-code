@@ -81,6 +81,7 @@ import {
 } from './metrics.js';
 import { QwenLogger } from './qwen-logger/qwen-logger.js';
 import { isTelemetrySdkInitialized } from './sdk.js';
+import { recordFlightEvent } from './flight-deck.js';
 import type {
   ApiErrorEvent,
   ApiCancelEvent,
@@ -194,6 +195,13 @@ export function logStartSession(
 }
 
 export function logUserPrompt(config: Config, event: UserPromptEvent): void {
+  if (!isInternalPromptId(event.prompt_id)) {
+    recordFlightEvent({
+      type: 'user_input',
+      label: 'user prompt',
+      timestamp: Date.now(),
+    });
+  }
   QwenLogger.getInstance(config)?.logNewPromptEvent(event);
   if (!isTelemetrySdkInitialized()) return;
 
@@ -664,6 +672,11 @@ export function logConversationFinishedEvent(
   config: Config,
   event: ConversationFinishedEvent,
 ): void {
+  recordFlightEvent({
+    type: 'task_complete',
+    label: 'task complete',
+    timestamp: Date.now(),
+  });
   QwenLogger.getInstance(config)?.logConversationFinishedEvent(event);
   if (!isTelemetrySdkInitialized()) return;
 

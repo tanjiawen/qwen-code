@@ -48,6 +48,7 @@ import {
   logApiResponse,
   logStartSession,
   logUserPrompt,
+  logConversationFinishedEvent,
   logToolCall,
   logFlashFallback,
   logChatCompression,
@@ -73,6 +74,7 @@ import { QwenLogger } from './qwen-logger/qwen-logger.js';
 import * as sdk from './sdk.js';
 import * as tokenUsageService from '../services/tokenUsageService.js';
 import { ToolCallDecision } from './tool-call-decision.js';
+import type { ConversationFinishedEvent } from './types.js';
 import {
   ApiRequestEvent,
   ApiResponseEvent,
@@ -98,6 +100,7 @@ import {
   MemoryRecallDeliveryEvent,
 } from './types.js';
 import { FileOperation } from './metrics.js';
+import { getRecentFlightEvents, clearFlightEvents } from './flight-deck.js';
 import type {
   CallableTool,
   GenerateContentResponseUsageMetadata,
@@ -2116,6 +2119,64 @@ describe('loggers', () => {
       logApiRetry(makeFakeConfig({ sessionId: 's' }), buildEvent());
       // The daemon health chart is independent of OTel export state.
       expect(apiActivityTracker.peek().retries).toBe(1);
+    });
+  });
+});
+
+describe('flight-deck wiring', () => {
+  const mockConfig = {
+    getSessionId: () => 'test-session-id',
+    getUsageStatisticsEnabled: () => false,
+  } as unknown as Config;
+
+  beforeEach(() => {
+    clearFlightEvents();
+    vi.spyOn(sdk, 'isTelemetrySdkInitialized').mockReturnValue(false);
+    vi.spyOn(QwenLogger, 'getInstance').mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('records a user_input flight event on a user prompt', () => {
+    logUserPrompt(
+      mockConfig,
+      new UserPromptEvent(
+        11,
+        'prompt-id-1',
+        AuthType.USE_GEMINI,
+        'test-prompt',
+      ),
+    );
+
+    const events = getRecentFlightEvents(10);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'user_input',
+      label: 'user prompt',
+    });
+  });
+
+  it('skips internal prompts such as suggestions', () => {
+    logUserPrompt(
+      mockConfig,
+      new UserPromptEvent(11, 'prompt_suggestion', AuthType.USE_GEMINI, 'x'),
+    );
+
+    expect(getRecentFlightEvents(10)).toHaveLength(0);
+  });
+
+  it('records a task_complete flight event when the conversation finishes', () => {
+    logConversationFinishedEvent(mockConfig, {
+      turnCount: 3,
+    } as unknown as ConversationFinishedEvent);
+
+    const events = getRecentFlightEvents(10);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'task_complete',
+      label: 'task complete',
     });
   });
 });

@@ -3,6 +3,47 @@ name: bugfix
 description: Fix a bug from a GitHub issue, following the reproduce-first
   workflow. Use when the user asks to fix a bug, investigate a GitHub issue, or
   debug a user-reported problem. Takes a GitHub issue URL or number as input.
+blueprint:
+  strictOrder: true
+  completionCheck: 'All tests pass, verification returns VERIFIED_FIXED, and self-audit has two consecutive clean passes.'
+  steps:
+    - description: 'Read the GitHub issue and create the artifact file'
+      tool: 'run_shell_command'
+    - description: 'Reproduce the bug via test-engineer agent'
+      tool: 'agent'
+      requires: 'Issue artifact file exists'
+    - description: 'Fix the bug based on reproduction report'
+      tool: 'edit'
+      requires: 'Reproduction status is REPRODUCED'
+    - description: 'Verify the fix via test-engineer agent'
+      tool: 'agent'
+      requires: 'Fix has been applied and build succeeds'
+    - description: 'Run unit tests for modified packages'
+      tool: 'run_shell_command'
+      requires: 'Verification returns VERIFIED_FIXED'
+    - description: 'Self-audit and code review'
+      requires: 'All tests pass'
+constraints:
+  - type: ordering
+    description: 'Reproduction must complete before any source code edit'
+    ordering:
+      before: 'Reproduce the bug via test-engineer agent'
+      after: 'Fix the bug based on reproduction report'
+  - type: mandatory
+    description: 'Before changing a function signature, export name, or public interface, grep all call sites and imports first'
+    mandatory:
+      tool: 'grep_search'
+      condition: 'edit targets a function signature, export, or public interface'
+  - type: mandatory
+    description: 'After multi-file edits, run typecheck to catch missed references'
+    mandatory:
+      tool: 'run_shell_command'
+      condition: 'edit touches more than one file'
+  - type: ordering
+    description: 'Verification must pass before self-audit'
+    ordering:
+      before: 'Verify the fix via test-engineer agent'
+      after: 'Self-audit and code review'
 ---
 
 # Bugfix Workflow
@@ -60,6 +101,17 @@ reproduction report. If the status is `NOT_REPRODUCED`, report that and stop.
 Read the relevant code and make the fix. Use the reproduction report for
 context; it should contain observed behavior, expected behavior, and useful code
 paths.
+
+### Multi-file edit safety (MANDATORY)
+
+Before changing a function signature, export name, or public interface:
+
+1. Use `grep_search` to find all call sites and imports of the symbol being
+   changed.
+2. List every file that references it.
+3. Include all affected files in the edit plan before making any changes.
+4. After editing, run the project's typecheck (`npm run typecheck` or
+   equivalent) to catch missed references.
 
 If the bug is complex enough that the first attempt does not work, use the
 `structured-debugging` skill and work through hypotheses systematically.

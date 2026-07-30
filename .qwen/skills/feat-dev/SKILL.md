@@ -4,6 +4,52 @@ description: End-to-end workflow for implementing a non-trivial qwen-code
   feature. Covers requirements investigation, design, E2E test planning,
   baseline dry-run, implementation, verification, self-audit, code review,
   and iteration.
+blueprint:
+  strictOrder: true
+  completionCheck: 'Build passes, typecheck passes, E2E tests pass, and self-audit has two consecutive clean passes.'
+  steps:
+    - description: 'Investigate current behavior and desired behavior'
+      tool: 'agent'
+    - description: 'Write design doc in docs/design/'
+      requires: 'Investigation complete'
+    - description: 'Write E2E test plan in .qwen/e2e-tests/'
+      requires: 'Design doc on disk'
+    - description: 'Dry-run test plan against baseline'
+      tool: 'agent'
+      requires: 'Test plan on disk'
+    - description: 'Implement changes per design doc'
+      tool: 'edit'
+      requires: 'Dry-run confirms test plan accuracy'
+    - description: 'Verify with full E2E test plan'
+      tool: 'agent'
+      requires: 'Build and typecheck pass'
+    - description: 'Self-audit and code review'
+      requires: 'All E2E tests pass'
+    - description: 'Wrap up: branch, commit, PR'
+      skippable: true
+      skipCondition: 'User does not request PR creation'
+      requires: 'Self-audit clean'
+constraints:
+  - type: ordering
+    description: 'Design doc must exist before implementation begins'
+    ordering:
+      before: 'Write design doc in docs/design/'
+      after: 'Implement changes per design doc'
+  - type: mandatory
+    description: 'Before changing a function signature, export name, or public interface, grep all call sites and imports first'
+    mandatory:
+      tool: 'grep_search'
+      condition: 'edit targets a function signature, export, or public interface'
+  - type: mandatory
+    description: 'After multi-file edits, run typecheck to catch missed references'
+    mandatory:
+      tool: 'run_shell_command'
+      condition: 'edit touches more than one file'
+  - type: ordering
+    description: 'E2E verification must pass before self-audit'
+    ordering:
+      before: 'Verify with full E2E test plan'
+      after: 'Self-audit and code review'
 ---
 
 # Feature Development Workflow
@@ -90,6 +136,17 @@ in the design doc and follow project conventions:
 - Prettier formatting.
 - Collocated tests next to source.
 - No speculative abstractions beyond the design.
+
+### Multi-file edit safety (MANDATORY)
+
+Before changing a function signature, export name, or public interface:
+
+1. Use `grep_search` to find all call sites and imports of the symbol being
+   changed.
+2. List every file that references it.
+3. Include all affected files in the edit plan before making any changes.
+4. After editing, run the project's typecheck (`npm run typecheck` or
+   equivalent) to catch missed references.
 
 After implementation:
 

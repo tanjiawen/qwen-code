@@ -677,6 +677,7 @@ export const AppContainer = (props: AppContainerProps) => {
   const [showWorktreeExitDialog, setShowWorktreeExitDialog] = useState(false);
   const snapshotTodosRef = useRef<TodoItem[]>([]);
   const snapshotLastPromptRef = useRef('');
+  const snapshotSummaryRef = useRef<string | null>(null);
   // P7-trigger: true while the current turn was steered toward the Workflow
   // tool by the `workflow` keyword (drives the Footer indicator). Set in
   // `handleFinalSubmit`, cleared when the turn returns to idle (effect below).
@@ -962,7 +963,7 @@ export const AppContainer = (props: AppContainerProps) => {
             ),
             toolCalls: metrics.tools.totalCalls,
           },
-          summary: null,
+          summary: snapshotSummaryRef.current,
         };
 
         writeSnapshot(config.storage.getLastSnapshotPath(), snapshot);
@@ -1712,6 +1713,59 @@ export const AppContainer = (props: AppContainerProps) => {
         // work during the exit window.
         config.getGeminiClient()?.requestShutdown();
         setTimeout(async () => {
+          // Best-effort LLM summary for the session snapshot. Runs before
+          // cleanup because cleanup has a 2 s per-function ceiling that is
+          // too tight for an LLM round-trip.
+          try {
+            const { generateSnapshotSummary } = await import(
+              '@qwen-code/qwen-code-core'
+            );
+            const { runSideQuery } = await import('@qwen-code/qwen-code-core');
+            const ac = new AbortController();
+            const timer = setTimeout(() => ac.abort(), 3000);
+            timer.unref?.();
+            const summary = await generateSnapshotSummary(
+              {
+                version: 1,
+                sessionId: sessionStats.sessionId,
+                timestamp: new Date().toISOString(),
+                projectRoot: config.getTargetDir(),
+                git: { branch: '', lastCommit: '', dirtyFiles: 0 },
+                task: {
+                  todos: snapshotTodosRef.current.map((t) => ({
+                    content: t.content,
+                    status: t.status,
+                  })),
+                  lastUserPrompt: snapshotLastPromptRef.current.slice(0, 200),
+                },
+                files: { modified: [] },
+                metrics: {
+                  turnCount: sessionStats.promptCount,
+                  totalTokens: 0,
+                  elapsedSeconds: 0,
+                  toolCalls: 0,
+                },
+                summary: null,
+              },
+              {
+                generate: async (prompt: string) => {
+                  const result = await runSideQuery(config, {
+                    purpose: 'snapshot-summary',
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    abortSignal: ac.signal,
+                    config: { maxOutputTokens: 200, temperature: 0.3 },
+                    maxAttempts: 1,
+                  });
+                  return result.text;
+                },
+              },
+              3000,
+            );
+            clearTimeout(timer);
+            snapshotSummaryRef.current = summary;
+          } catch {
+            // Best-effort — summary stays null.
+          }
           await runExitCleanup();
           process.exit(0);
         }, 100);
@@ -1764,6 +1818,7 @@ export const AppContainer = (props: AppContainerProps) => {
       openHelpDialog,
       openDiffDialog,
       config,
+      sessionStats,
     ],
   );
 

@@ -16,7 +16,10 @@ import {
   formatSnapshotForPrompt,
   type SessionSnapshot,
 } from './session-snapshot.js';
-import { generateSnapshotSummary } from './session-snapshot-summary.js';
+import {
+  generateSnapshotSummary,
+  buildFallbackSummary,
+} from './session-snapshot-summary.js';
 
 function makeSnapshot(
   overrides: Partial<SessionSnapshot> = {},
@@ -182,5 +185,60 @@ describe('session-snapshot-summary', () => {
     };
     const result = await generateSnapshotSummary(makeSnapshot(), generator);
     expect(result!.length).toBe(500);
+  });
+});
+
+describe('buildFallbackSummary', () => {
+  it('describes a session with interactions', () => {
+    const summary = buildFallbackSummary(makeSnapshot());
+    expect(summary).toContain('5 轮交互');
+    expect(summary).toContain('帮我实现这个功能');
+    expect(summary).toContain('修改了 1 个文件');
+    expect(summary).toContain('1 项待办未完成');
+  });
+
+  it('describes a session with no interactions', () => {
+    const snapshot = makeSnapshot({
+      metrics: {
+        turnCount: 0,
+        totalTokens: 0,
+        elapsedSeconds: 30,
+        toolCalls: 0,
+      },
+      task: { todos: [], lastUserPrompt: '/exit' },
+      files: { modified: [] },
+    });
+    const summary = buildFallbackSummary(snapshot);
+    expect(summary).toContain('未进行实质交互即退出');
+    expect(summary).not.toContain('轮交互');
+  });
+
+  it('omits file clause when no files modified', () => {
+    const snapshot = makeSnapshot({ files: { modified: [] } });
+    const summary = buildFallbackSummary(snapshot);
+    expect(summary).not.toContain('修改了');
+  });
+
+  it('omits todo clause when all completed', () => {
+    const snapshot = makeSnapshot({
+      task: {
+        todos: [{ content: 'done', status: 'completed' }],
+        lastUserPrompt: 'test',
+      },
+    });
+    const summary = buildFallbackSummary(snapshot);
+    expect(summary).not.toContain('待办未完成');
+  });
+
+  it('truncates long lastUserPrompt', () => {
+    const snapshot = makeSnapshot({
+      task: {
+        todos: [],
+        lastUserPrompt: 'x'.repeat(200),
+      },
+    });
+    const summary = buildFallbackSummary(snapshot);
+    expect(summary).toContain('x'.repeat(40));
+    expect(summary).not.toContain('x'.repeat(41));
   });
 });

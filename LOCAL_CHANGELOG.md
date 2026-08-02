@@ -5,6 +5,46 @@
 
 ---
 
+## v0.21.2-study.11 (2026-08-03)
+
+**主题：修完审计剩下的两个问题（模块说明书 + 技能瘦身）**
+
+### 背景
+
+首次 `/better-harness` 审计共 4 个问题，study.10 修了前两个（门禁的维护者
+豁免、缺依赖兜底）。本版本修完后两个：① 每个代码模块缺少自己的说明书；
+② 十几个技能文件又长又全、一调用就占满上下文。同时把审计报告本身重写成了
+普通人能读懂的大白话（此前过于拗口）。
+
+### 变更内容
+
+#### 1. 模块级说明书（docs，审计 Finding #3）
+
+- **新增** `packages/core/AGENTS.md` 与 `packages/cli/AGENTS.md`：承接根
+  AGENTS.md 的规则并本地化——讲清本包是什么、高风险路径、包内验证命令、
+  特有的坑（如 core 的 ESM-only / 导出面，cli 的 vi.hoisted mock / 快照 /
+  i18n）、下一步路由。不重复通用规则。
+- 缓解「一份总规则要覆盖约 1800 个源文件、模块级覆盖为 0」的问题。
+
+#### 2. 技能渐进式披露拆分（refactor，审计 Finding #4）
+
+把最长的两个技能拆成「精简主文件 + 按需引用文档」，内容逐字搬移、无删减：
+
+- **verify-pr**：638 → 118 行，拆出 8 个引用文档（environment / ab-proof /
+  vacuity / wire-oracles / gates / artifact-types / report-contract /
+  hard-rules）
+- **codegraph**：657 → 178 行，新增 3 个文档（examples / java / api）并扩充
+  schema / patterns / bug-analysis / pr-analysis
+- 两个主文件都远低于 500 行硬上限，30 个引用链接全部指向真实文件。
+
+#### 3. 审计报告改写为大白话（不入库）
+
+- `.qwen/better-harness/run-20260803-000737/` 的 findings.json / report.html
+  重写：去掉「接线 / 演练 / fail-open」等黑话，按「原来什么问题 → 为什么 →
+  现在怎么修的」讲清楚（该目录 git-ignored）。
+
+---
+
 ## v0.21.2-study.10 (2026-08-03)
 
 **主题：门禁缺口修复（审计驱动）+ Progress Panel 新增 Better Harness 列**

@@ -5,85 +5,25 @@
 
 ---
 
-## v0.21.2-study.7 (2026-07-31)
+## v0.21.2-study.8 (2026-08-02)
 
-**主题：Session Snapshot——退出时真正生成 LLM 会话摘要**
-
-### 背景
-
-study.6 落地了快照数据层和 `generateSnapshotSummary()`，但退出写入时
-`summary` 字段仍硬编码为 `null`——LLM 摘要能力实现了却没有接进退出流程，
-恢复快照时永远看不到摘要。本次把它真正接通。
-
-### 变更内容
-
-#### 1. 退出摘要生成（CLI 层）
-
-- **修改** `packages/cli/src/ui/AppContainer.tsx`
-  - quit handler 在 `runExitCleanup()` 之前调用 `generateSnapshotSummary`
-    （经 `runSideQuery` 走 LLM）。之所以放在 cleanup 前，是因为 cleanup
-    每个函数有 2 秒上限，对一次 LLM 往返太紧
-  - 用 `AbortController` 做 3 秒超时保护
-  - 新增 `snapshotSummaryRef` 保存结果；cleanup 写快照时从 ref 读取，
-    取代原来硬编码的 `null`
-  - 全程 best-effort：任何失败（超时 / 无模型 / 异常）摘要保持 `null`，
-    不阻塞退出
-  - 将 `sessionStats` 补进 imperative-handle 的 `useMemo` 依赖数组
-    （退出处理函数读取了它，修复 ESLint exhaustive-deps 告警）
-
----
-
-## v0.21.2-study.6 (2026-07-31)
-
-**主题：Session Snapshot——退出保存工作区快照，启动自动恢复**
+**主题：回滚 Session Snapshot 功能**
 
 ### 背景
 
-每次重新启动 Qwen Code 时，agent 对上一次会话的工作内容完全失忆。用户
-需要重新描述上下文。本次实现退出时自动保存结构化快照（+ 可选 LLM 摘要），
-下次在同一项目启动时静默恢复为系统上下文。
+study.6 / study.7 实现的 Session Snapshot（退出保存工作区快照、启动自动
+恢复、退出时生成 LLM 会话摘要）未达到预期效果，决定整体回滚到该功能之前
+的状态。
 
 ### 变更内容
 
-#### 1. 快照数据层（Core 层）
-
-- **新增** `packages/core/src/services/session-snapshot.ts`
-  - `SessionSnapshot` 数据模型：git 分支/提交、todo 状态、修改文件、
-    会话指标、LLM 摘要
-  - `writeSnapshot()` / `readLastSnapshot()` / `clearSnapshot()`
-  - `isSnapshotRecent()`：过期判断（默认 72 小时）
-  - `formatSnapshotForPrompt()`：格式化为系统提示注入文本
-- **新增** `packages/core/src/services/session-snapshot-summary.ts`
-  - `generateSnapshotSummary()`：调用 LLM 生成 2-3 句中文摘要，
-    3 秒超时保护，失败返回 null
-- **新增** `packages/core/src/services/session-snapshot.test.ts`（17 例）
-
-#### 2. 存储与配置
-
-- **修改** `packages/core/src/config/storage.ts`
-  - 新增 `getLastSnapshotPath()`：`~/.qwen/projects/<id>/last-snapshot.json`
-- **修改** `packages/core/src/config/config.ts`
-  - 新增 `sessionSnapshotContext` / `sessionSnapshotRestored` 字段及 getter/setter
-- **修改** `packages/core/src/core/client.ts`
-  - 系统提示拼接时追加快照上下文（两处）
-
-#### 3. 退出写入（CLI 层）
-
-- **修改** `packages/cli/src/ui/AppContainer.tsx`
-  - 注册 cleanup 函数：收集 git 状态、FileHistory 修改文件、
-    sessionStats 指标、todos、最后用户指令，写入快照文件
-  - 新增 `snapshotTodosRef` / `snapshotLastPromptRef` 保持最新状态
-
-#### 4. 启动恢复（CLI 层）
-
-- **修改** `packages/cli/src/gemini.tsx`
-  - `loadCliConfig` 之后读取快照，72 小时内有效则注入系统上下文
-  - 支持 `settings.json` 中 `sessionSnapshot.enabled/llmSummary/maxAgeHours`
-
-#### 5. Progress Panel 指示
-
-- **修改** `packages/cli/src/ui/components/ProgressPanel.tsx`
-  - L0 状态条末尾显示 "📋 快照已恢复"（仅当本次启动恢复了快照时）
+- 通过 `git revert` 撤销 study.6（快照数据层 + 退出写入 + 启动恢复）与
+  study.7（退出 LLM 摘要）两次提交，并丢弃相关的未提交改动
+- **删除** `packages/core/src/services/session-snapshot.ts`、
+  `session-snapshot-summary.ts`、`session-snapshot.test.ts`
+- **还原** `config.ts` / `storage.ts` / `client.ts` / `index.ts` /
+  `gemini.tsx` / `AppContainer.tsx` / `ProgressPanel.tsx` 中该功能的所有改动
+- 飞行仪表盘 / Progress Panel 重写（study.4 / study.5）不受影响，予以保留
 
 ---
 

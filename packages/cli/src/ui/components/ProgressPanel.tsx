@@ -27,7 +27,9 @@ import {
   resolveTerminalPhase,
   PHASE_LABEL_ZH,
   type LifecyclePhase,
+  type BetterHarnessSeverity,
 } from '../utils/progress-insights.js';
+import { useBetterHarnessPanel } from '../hooks/use-better-harness-panel.js';
 
 const POLL_INTERVAL_MS = 1000;
 const BAR_WIDTH = 14;
@@ -41,6 +43,39 @@ const MODE_LABEL_ZH: Record<RightMode, string> = {
   memory: '系统记忆',
   graph: '知识图谱',
 };
+
+// Better Harness 第三列：终端宽于该值时三列并排，否则降级为下方整行。
+const THREE_COLUMN_MIN_WIDTH = 110;
+const SEVERITY_LABEL_ZH: Record<BetterHarnessSeverity, string> = {
+  Critical: '严重',
+  High: '高',
+  Medium: '中',
+  Low: '低',
+};
+
+// 五维短标签（2 字，4 可视列），避免在窄列里换行；未知 id 回退到面板 label。
+const BH_DIMENSION_SHORT_ZH: Record<string, string> = {
+  'task-understanding': '任务',
+  'controlled-execution': '执行',
+  'change-validation': '验证',
+  'reliable-delivery': '交付',
+  'learning-capture': '学习',
+};
+
+function bhDimensionLabel(id: string, label: string): string {
+  return BH_DIMENSION_SHORT_ZH[id] ?? label.slice(0, 2);
+}
+
+function severityColor(severity: BetterHarnessSeverity): string {
+  switch (severity) {
+    case 'Critical':
+      return theme.status.error;
+    case 'High':
+      return theme.status.warning;
+    default:
+      return theme.text.secondary;
+  }
+}
 
 // ─── 格式化 ───────────────────────────────────────────────────────────────────
 
@@ -231,6 +266,9 @@ export const ProgressPanel: React.FC = () => {
 
   const { context, tokens, tools, latency, cost, health } = snapshot;
 
+  // Better Harness 第三列：最近一次审计的五维分数 + findings 概览。
+  const betterHarnessPanel = useBetterHarnessPanel(process.cwd());
+
   // 思考链 / 记忆 / 图谱：仅在历史增长时重算。
   const historyLen = history.length;
   const lastItemId = historyLen > 0 ? history[historyLen - 1]!.id : -1;
@@ -322,7 +360,7 @@ export const ProgressPanel: React.FC = () => {
       .join(' · ') || '–';
 
   const metricsColumn = (
-    <Box flexDirection="column" flexGrow={1} width="50%">
+    <Box flexDirection="column" flexGrow={1}>
       <Stat label="上下文">
         <Bar pct={context.usedPercent} width={10} />
         <Text color={pctColor(context.usedPercent)}>
@@ -431,7 +469,7 @@ export const ProgressPanel: React.FC = () => {
   // ─── 右列：思考链 / 记忆 / 图谱 ─────────────────────────────────────────────
 
   const rightColumn = (
-    <Box flexDirection="column" flexGrow={1} width="50%" paddingLeft={1}>
+    <Box flexDirection="column" flexGrow={1} paddingLeft={1}>
       <Box>
         <Text bold color={theme.text.accent}>
           {MODE_LABEL_ZH[mode]}
@@ -510,6 +548,110 @@ export const ProgressPanel: React.FC = () => {
     </Box>
   );
 
+  // ─── Better Harness 列：五维分数 + findings 概览 ────────────────────────────
+
+  const bhSeverityBits = betterHarnessPanel
+    ? (
+        Object.keys(
+          betterHarnessPanel.severityCounts,
+        ) as BetterHarnessSeverity[]
+      )
+        .filter((severity) => betterHarnessPanel.severityCounts[severity] > 0)
+        .map((severity) => (
+          <Text key={severity}>
+            <Text dimColor> </Text>
+            <Text color={severityColor(severity)}>
+              {SEVERITY_LABEL_ZH[severity]}
+              {betterHarnessPanel.severityCounts[severity]}
+            </Text>
+          </Text>
+        ))
+    : [];
+
+  const bhBody = betterHarnessPanel ? (
+    <>
+      {betterHarnessPanel.dimensions.map((dimension) => (
+        <Box key={dimension.id}>
+          <Box width={5}>
+            <Text dimColor>
+              {bhDimensionLabel(dimension.id, dimension.label)}
+            </Text>
+          </Box>
+          <Bar pct={dimension.score} width={8} />
+          <Text color={pctColor(dimension.score)}>
+            {' '}
+            {String(dimension.score).padStart(3)}
+          </Text>
+        </Box>
+      ))}
+      <Text>
+        <Text dimColor>发现 </Text>
+        <Text>{betterHarnessPanel.findingsTotal}</Text>
+        {bhSeverityBits.length > 0 && <Text dimColor> ·</Text>}
+        {bhSeverityBits}
+      </Text>
+      <Text dimColor>
+        {betterHarnessPanel.auditedAt
+          ? `审计 ${betterHarnessPanel.auditedAt.toLocaleString('zh-CN', {
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+            })}`
+          : '—'}
+      </Text>
+    </>
+  ) : (
+    <Text dimColor>未审计 · 运行 /better-harness</Text>
+  );
+
+  const bhHeader = (
+    <Text bold color={theme.text.accent}>
+      Better Harness
+    </Text>
+  );
+
+  const betterHarnessColumn = (
+    <Box flexDirection="column" flexGrow={1} width="34%" paddingLeft={1}>
+      {bhHeader}
+      {bhBody}
+    </Box>
+  );
+
+  const betterHarnessRow = (
+    <Box flexDirection="column" paddingTop={1}>
+      {bhHeader}
+      <Box>
+        {betterHarnessPanel ? (
+          betterHarnessPanel.dimensions.map((dimension) => (
+            <Box key={dimension.id} paddingRight={2}>
+              <Text dimColor>
+                {bhDimensionLabel(dimension.id, dimension.label)}{' '}
+              </Text>
+              <Bar pct={dimension.score} width={6} />
+              <Text color={pctColor(dimension.score)}>
+                {' '}
+                {String(dimension.score).padStart(3)}
+              </Text>
+            </Box>
+          ))
+        ) : (
+          <Text dimColor>未审计 · 运行 /better-harness</Text>
+        )}
+      </Box>
+      {betterHarnessPanel && (
+        <Text>
+          <Text dimColor>发现 </Text>
+          <Text>{betterHarnessPanel.findingsTotal}</Text>
+          {bhSeverityBits.length > 0 && <Text dimColor> ·</Text>}
+          {bhSeverityBits}
+        </Text>
+      )}
+    </Box>
+  );
+
+  const isWide = uiState.terminalWidth >= THREE_COLUMN_MIN_WIDTH;
+
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan">
       {/* 头部 */}
@@ -529,9 +671,14 @@ export const ProgressPanel: React.FC = () => {
 
       {statusLine}
 
-      <Box paddingX={1}>
-        {metricsColumn}
-        {rightColumn}
+      <Box paddingX={1} flexDirection={isWide ? 'row' : 'column'}>
+        <Box flexGrow={1} width={isWide ? '33%' : '50%'}>
+          {metricsColumn}
+        </Box>
+        <Box flexGrow={1} width={isWide ? '33%' : '50%'}>
+          {rightColumn}
+        </Box>
+        {isWide ? betterHarnessColumn : betterHarnessRow}
       </Box>
 
       {/* 明细表（按需） */}

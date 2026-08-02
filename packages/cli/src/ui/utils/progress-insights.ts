@@ -349,3 +349,118 @@ export function resolveTerminalPhase(signals: TerminalSignals): LifecyclePhase {
   if (signals.interrupted) return 'interrupted';
   return 'completed';
 }
+
+// ─── Better Harness 审计面板 ──────────────────────────────────────────────────
+// 解析最近一次 /better-harness 审计渲染出的 findings.json，给 ProgressPanel
+// 第三列提供五维分数（Loop Effectiveness）与 findings 概览。
+
+export type BetterHarnessSeverity = 'Critical' | 'High' | 'Medium' | 'Low';
+
+export interface BetterHarnessDimension {
+  id: string;
+  label: string;
+  score: number;
+}
+
+export interface BetterHarnessPanel {
+  dimensions: BetterHarnessDimension[];
+  findingsTotal: number;
+  severityCounts: Record<BetterHarnessSeverity, number>;
+  /** 审计产出的本地时间；缺省时为 null。 */
+  auditedAt: Date | null;
+}
+
+export const BETTER_HARNESS_DIMENSION_LABEL_ZH: Record<string, string> = {
+  'task-understanding': '任务理解',
+  'controlled-execution': '可控执行',
+  'change-validation': '改动验证',
+  'reliable-delivery': '可靠交付',
+  'learning-capture': '经验沉淀',
+};
+
+const SEVERITY_KEYS: readonly BetterHarnessSeverity[] = [
+  'Critical',
+  'High',
+  'Medium',
+  'Low',
+];
+
+function normalizeSeverity(value: unknown): BetterHarnessSeverity | null {
+  if (typeof value !== 'string') return null;
+  const match = SEVERITY_KEYS.find(
+    (key) => key.toLowerCase() === value.toLowerCase(),
+  );
+  return match ?? null;
+}
+
+/**
+ * 解析 findings.json 文本为面板数据。空、解析失败或缺少维度时返回 null，
+ * 由调用方显示「未审计」占位。
+ */
+export function buildBetterHarnessPanel(
+  findingsJson: string,
+): BetterHarnessPanel | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(findingsJson);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+
+  const summary = (parsed as { summary?: unknown }).summary;
+  const rawDimensions =
+    typeof summary === 'object' && summary !== null
+      ? (summary as { dimensions?: unknown }).dimensions
+      : undefined;
+  if (!Array.isArray(rawDimensions) || rawDimensions.length === 0) return null;
+
+  const dimensions: BetterHarnessDimension[] = [];
+  for (const entry of rawDimensions) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { id, label, score } = entry as {
+      id?: unknown;
+      label?: unknown;
+      score?: unknown;
+    };
+    if (typeof id !== 'string' || typeof score !== 'number') continue;
+    dimensions.push({
+      id,
+      label:
+        BETTER_HARNESS_DIMENSION_LABEL_ZH[id] ??
+        (typeof label === 'string' ? label : id),
+      score,
+    });
+  }
+  if (dimensions.length === 0) return null;
+
+  const severityCounts: Record<BetterHarnessSeverity, number> = {
+    Critical: 0,
+    High: 0,
+    Medium: 0,
+    Low: 0,
+  };
+  const rawFindings = (parsed as { findings?: unknown }).findings;
+  const findings = Array.isArray(rawFindings) ? rawFindings : [];
+  for (const finding of findings) {
+    if (typeof finding !== 'object' || finding === null) continue;
+    const severity = normalizeSeverity(
+      (finding as { severity?: unknown }).severity,
+    );
+    if (severity) severityCounts[severity] += 1;
+  }
+
+  let auditedAt: Date | null = null;
+  const maybeTime = (parsed as { generatedAt?: unknown }).generatedAt;
+  if (typeof maybeTime === 'string') {
+    const time = Date.parse(maybeTime);
+    if (Number.isFinite(time)) auditedAt = new Date(time);
+  }
+
+  return {
+    dimensions,
+    findingsTotal: findings.length,
+    severityCounts,
+    auditedAt,
+  };
+}

@@ -19,6 +19,7 @@ import {
   derivePhase,
   resolveTerminalPhase,
   PHASE_LABEL_ZH,
+  buildBetterHarnessPanel,
 } from './progress-insights.js';
 
 // ─── 工厂 ─────────────────────────────────────────────────────────────────────
@@ -321,5 +322,122 @@ describe('PHASE_LABEL_ZH', () => {
     expect(PHASE_LABEL_ZH.stalled).toBe('停滞');
     expect(PHASE_LABEL_ZH.broke).toBe('已跳出');
     expect(Object.keys(PHASE_LABEL_ZH)).toHaveLength(7);
+  });
+});
+
+// ─── Better Harness 审计面板 ──────────────────────────────────────────────────
+
+function findingsJson(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    summary: {
+      dimensions: [
+        { id: 'task-understanding', label: 'Task Understanding', score: 72 },
+        {
+          id: 'controlled-execution',
+          label: 'Controlled Execution',
+          score: 68,
+        },
+        { id: 'change-validation', label: 'Change Validation', score: 76 },
+        { id: 'reliable-delivery', label: 'Reliable Delivery', score: 48 },
+        { id: 'learning-capture', label: 'Learning Capture', score: 35 },
+      ],
+    },
+    findings: [
+      { id: 'f1', title: 'a', severity: 'High' },
+      { id: 'f2', title: 'b', severity: 'Medium' },
+      { id: 'f3', title: 'c', severity: 'Medium' },
+      { id: 'f4', title: 'd', severity: 'Low' },
+    ],
+    ...overrides,
+  });
+}
+
+describe('buildBetterHarnessPanel', () => {
+  it('解析五维分数并映射中文标签', () => {
+    const panel = buildBetterHarnessPanel(findingsJson());
+    expect(panel).not.toBeNull();
+    expect(panel!.dimensions).toHaveLength(5);
+    expect(panel!.dimensions[0]).toEqual({
+      id: 'task-understanding',
+      label: '任务理解',
+      score: 72,
+    });
+    expect(panel!.dimensions[4]).toEqual({
+      id: 'learning-capture',
+      label: '经验沉淀',
+      score: 35,
+    });
+  });
+
+  it('聚合 findings 严重度计数', () => {
+    const panel = buildBetterHarnessPanel(findingsJson())!;
+    expect(panel.findingsTotal).toBe(4);
+    expect(panel.severityCounts).toEqual({
+      Critical: 0,
+      High: 1,
+      Medium: 2,
+      Low: 1,
+    });
+  });
+
+  it('findings 缺失时计数为 0', () => {
+    const panel = buildBetterHarnessPanel(findingsJson({ findings: [] }))!;
+    expect(panel.findingsTotal).toBe(0);
+    expect(panel.severityCounts.High).toBe(0);
+  });
+
+  it('解析 generatedAt 为审计时间', () => {
+    const panel = buildBetterHarnessPanel(
+      findingsJson({ generatedAt: '2026-08-03T00:07:37.000Z' }),
+    )!;
+    expect(panel.auditedAt).toBeInstanceOf(Date);
+    expect(panel.auditedAt!.toISOString()).toBe('2026-08-03T00:07:37.000Z');
+  });
+
+  it('无 generatedAt 时审计时间为 null', () => {
+    expect(buildBetterHarnessPanel(findingsJson())!.auditedAt).toBeNull();
+  });
+
+  it('畸形 JSON 返回 null', () => {
+    expect(buildBetterHarnessPanel('{ not json')).toBeNull();
+  });
+
+  it('缺少维度返回 null', () => {
+    expect(buildBetterHarnessPanel(JSON.stringify({ summary: {} }))).toBeNull();
+    expect(buildBetterHarnessPanel(JSON.stringify({}))).toBeNull();
+  });
+
+  it('跳过非法维度项与未知严重度', () => {
+    const panel = buildBetterHarnessPanel(
+      JSON.stringify({
+        summary: {
+          dimensions: [
+            { id: 'task-understanding', score: 72 },
+            { id: 123, score: 99 }, // 非法 id，跳过
+            { id: 'change-validation' }, // 缺 score，跳过
+          ],
+        },
+        findings: [
+          { id: 'f1', severity: 'High' },
+          { id: 'f2', severity: 'weird' }, // 未知严重度，不计入
+          { id: 'f3' }, // 缺严重度，不计入
+        ],
+      }),
+    )!;
+    expect(panel.dimensions).toHaveLength(1);
+    expect(panel.findingsTotal).toBe(3);
+    expect(panel.severityCounts.High).toBe(1);
+  });
+
+  it('未知维度 id 回退到原始 label', () => {
+    const panel = buildBetterHarnessPanel(
+      JSON.stringify({
+        summary: {
+          dimensions: [{ id: 'custom-dim', label: 'Custom Dim', score: 50 }],
+        },
+        findings: [],
+      }),
+    )!;
+    expect(panel.dimensions[0]!.label).toBe('Custom Dim');
   });
 });

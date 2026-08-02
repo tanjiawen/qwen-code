@@ -1840,8 +1840,6 @@ export class Config {
    * the shortest possible cached prompt prefix.
    */
   private autoMemoryPrompt = '';
-  private sessionSnapshotContext = '';
-  private sessionSnapshotRestored = false;
   private sdkMode: boolean;
   private geminiMdFileCount: number;
   private conditionalRulesRegistry: ConditionalRulesRegistry | undefined;
@@ -5579,22 +5577,6 @@ export class Config {
    */
   getAutoMemoryPrompt(): string {
     return this.autoMemoryPrompt;
-  }
-
-  getSessionSnapshotContext(): string {
-    return this.sessionSnapshotContext;
-  }
-
-  setSessionSnapshotContext(context: string): void {
-    this.sessionSnapshotContext = context;
-  }
-
-  isSessionSnapshotRestored(): boolean {
-    return this.sessionSnapshotRestored;
-  }
-
-  setSessionSnapshotRestored(restored: boolean): void {
-    this.sessionSnapshotRestored = restored;
   }
 
   getOutputLanguageFilePath(): string | undefined {

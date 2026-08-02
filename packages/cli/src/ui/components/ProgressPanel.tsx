@@ -293,9 +293,6 @@ export const ProgressPanel: React.FC = () => {
       >
         {health.apiConnected ? '📡✓' : '📡✗'}
       </Text>
-      {config.isSessionSnapshotRestored() && (
-        <Text color={theme.text.secondary}> 📋 快照已恢复</Text>
-      )}
     </Box>
   );
 

@@ -421,10 +421,6 @@ export class Storage {
     return path.join(this.getProjectTempDir(), 'checkpoints');
   }
 
-  getLastSnapshotPath(): string {
-    return path.join(this.getProjectDir(), 'last-snapshot.json');
-  }
-
   getExtensionsDir(): string {
     return path.join(this.getQwenDir(), 'extensions');
   }

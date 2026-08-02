@@ -211,6 +211,17 @@ npm run preflight  # Full check: clean → install → format → lint → build
    Here, `/review` means the Codex code-review workflow, not Qwen Review or
    the `qwen-review` plugin. Do not invoke Qwen Review unless the user
    explicitly requests it by name.
+6. **Better Harness gate (mandatory)** — every code change is gated by Better
+   Harness, layered as: (a) a Stop hook
+   (`~/.qwen/scripts/better-harness-stop-gate.sh`) blocks the agent from
+   ending a turn that changed source code with unresolved error-level
+   findings; (b) the git pre-commit hook (`scripts/better-harness-gate.mjs`)
+   hard-blocks commits that are critical-severity, remove security code, or
+   touch high/critical-risk core areas. On top of these per-change gates, run
+   the full five-dimension `/better-harness` audit at each milestone (before a
+   PR or release) and keep its report as a deliverable. Thresholds live in
+   `.better-harness/blast-radius.json`; do not weaken them to pass a check —
+   fix the change or add the missing test evidence instead.
 
 ### Feature development
 

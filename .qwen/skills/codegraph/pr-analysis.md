@@ -417,3 +417,134 @@ RETURN pr1.id, pr2.id;
 
 - Index directory: `.codegraph/` (repo root, add to `.gitignore`)
 - Default output: `/tmp/pr_analysis.txt` (configurable)
+
+---
+
+## Unified Pipeline Reference
+
+CodeScope can analyze open PRs against the indexed code graph to compute structural risk scores, detect cross-PR conflicts, and generate prioritized review reports.
+
+### Prerequisites
+
+- A code graph must already be indexed for the target repository
+- `gh` CLI must be installed and authenticated (`gh auth login`)
+- `GITHUB_TOKEN` environment variable recommended to avoid rate limiting
+
+### PRReview Query Methods (additional)
+
+Beyond `conflict_prs_of` / `risk` / `conflicting_groups`, the `PRReview` wrapper exposes:
+
+```python
+from codegraph.pr_api import PRReview
+
+with PRReview(db=".codegraph") as pr:
+    # Classification
+    pr.auto_merge_candidates()          # → [{"number": "200", ...}, ...]
+
+    # All PRs in DB
+    pr.all_prs()                        # → [{"number": "100", ...}, ...]
+
+    # Functions changed by a specific PR (added / modified / deleted)
+    import json
+    cs = pr._open_cs()
+    rows = list(cs.conn.execute(
+        f"MATCH (pr:PR {{id: {json.dumps('439')}}})-[c:CHANGES]->(f:Function) "
+        f"RETURN c.info AS change_type, f.name, f.file_path "
+        f"ORDER BY c.info, f.name"
+    ))
+    for change_type, name, path in rows:
+        print(f"  [{change_type}] {name} ({path})")
+    # change_type: 'hunk' (modified), 'new' (added), 'deleted', 'related' (newly calls)
+```
+
+### Lower-Level Components
+
+For lower-level components (PRScorer, CrossPRAnalyzer, etc.), see:
+
+```python
+from codegraph.pr_analysis import GitHubClient, GraphAnalyzer, PRScorer, CrossPRAnalyzer
+gh = GitHubClient(repo='owner/repo')
+scorer = PRScorer(GraphAnalyzer(cs, repo_dir), repo_dir, gh)
+result = scorer.analyze(gh.pr_to_entry(pr), output_dir='/tmp')  # risk_score, risk_level, peak_blast...
+
+cross = CrossPRAnalyzer(cs, repo_dir, gh)
+cross.prepare(pr_ids)  # index PR nodes into graph
+cross.connected_components()  # {root: [pr_ids]} — detects conflicts
+cross.update_pr_labels(assignments)  # persist labels to graph DB
+
+# Load PR results from graph DB (no GitHub API needed)
+all_results, components = cross.load_from_graph()
+
+# Build and apply labels from analysis results
+from codegraph.pr_labeler import build_label_assignments, apply_labels
+assignments = build_label_assignments(all_results, components)
+apply_labels(assignments, repo='owner/repo', create_labels=True)
+```
+
+### Report Structure (3 sections)
+
+1. **Auto-merge Candidates**: LOW risk, no interface/config changes, singleton component
+2. **Independent Review**: Non-trivial PRs with no cross-PR conflict
+3. **Conflicting PR Groups**: PRs sharing code/call paths via connected-components (DSU)
+
+Risk levels: CRITICAL (≥12), HIGH (≥7), MEDIUM (≥3), LOW (<3), UNKNOWN (when `--skip-single-pr`). Key signals: blast_radius (3.0×), no_test_coverage (2.0×), interface_change (2.5×), dead_code (1.5×).
+
+### Applying Labels and Conflict Comments
+
+After running `codegraph pr-review prepare`, run `codegraph pr-review label` to apply category labels to GitHub PRs and post conflict comments:
+
+```bash
+# Apply labels and post conflict comments:
+codegraph pr-review label --db .codegraph
+
+# Preview without making API calls:
+codegraph pr-review label --db .codegraph --dry-run
+```
+
+The `label` subcommand reads PR labels from the graph DB (`pr.label` column) — no re-analysis needed. For conflicting PRs (labelled `conflicting-group-N`), it also posts a comment on the GitHub PR listing shared functions and other conflicting PRs.
+
+Labels are computed during `prepare` from the analysis results (connected components + risk scores) and persisted to PR nodes in the graph DB (`pr.label` column, semicolon-delimited).
+
+Label scheme:
+
+| Category                       | Label                  | Color           |
+| ------------------------------ | ---------------------- | --------------- |
+| Auto-merge Candidates (Part 1) | `auto-merge-candidate` | Green           |
+| Independent Review (Part 2)    | `independent-review`   | Yellow          |
+| Conflicting Group N (Part 3)   | `conflicting-group-N`  | Red/Orange/Blue |
+| Any conflicting PR (Part 3)    | `conflicting-pr`       | Red             |
+
+### Follow-up Exploration
+
+PR-specific follow-up questions are automatically included in `codegraph explore` when PR nodes exist in the graph DB (i.e., after `codegraph pr-review prepare`). PR exploration is a question template set integrated into `explore`. To query a specific PR's details (conflicts, changed functions), use the `PRReview` Python API.
+
+```bash
+# After pr-review prepare, explore includes PR questions automatically:
+codegraph explore --db .codegraph --top 15
+
+# Interactive exploration (including PR follow-up questions):
+codegraph explore --db .codegraph
+
+# Focus on PR-specific questions (use reviewer role):
+codegraph explore --db .codegraph --role reviewer
+
+# Filter to only architecture questions (exclude PR patterns):
+codegraph explore --db .codegraph --type architecture
+
+# Filter to only risk questions:
+codegraph explore --db .codegraph --type risk
+
+# Filter to only PR review questions:
+codegraph explore --db .codegraph --type pr-review --role reviewer
+```
+
+The `--type` filter controls which question categories appear:
+
+- `all` (default): all categories mixed together
+- `architecture`: structural design questions (fan-in, coupling, cycles)
+- `risk`: risk-focused questions (structural risk + PR risk)
+- `evolution`: git history questions (change attribution, modification patterns)
+- `hotspot`: frequently modified code questions
+- `pr-review`: PR-specific questions (impact, conflicts, test coverage)
+
+When `--type pr-review` is specified, only PR-related questions are shown.

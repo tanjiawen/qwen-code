@@ -240,3 +240,81 @@ codegraph analyze-bugs owner repo --db .codegraph --top 10
 codegraph fetch-issue owner repo 1234 --no-cache
 codegraph analyze-bug owner repo 1234 --db .codegraph --no-cache
 ```
+
+## Analysis Internals and Reference
+
+CodeScope can fetch GitHub issues and map them to code using the graph + vector infrastructure. This is the core workflow for answering questions like "why does this project have so many bugs?" or "where in the code does this bug come from?"
+
+### Prerequisites
+
+- A code graph must already be indexed for the target repository
+- `gh` CLI must be installed and authenticated (`gh auth login`)
+
+### How Single Issue Analysis Works
+
+`cs.analyze_issue("owner", "repo", 1234, topk=10)`:
+
+1. Fetches the issue from GitHub (or loads from cache)
+2. Parses file paths, function names, and stack traces from the issue body
+3. Matches extracted paths to File nodes in the graph
+4. Uses semantic search (`cross_locate`) to find related code
+5. Traces callers of mentioned functions via `impact()`
+6. Ranks and returns root cause candidates with explanation
+
+### Lower-Level Components
+
+For custom analysis pipelines, the components can be used individually:
+
+```python
+from codegraph.issue_fetcher import fetch_and_parse_issue
+from codegraph.bug_locator import (
+    resolve_paths_to_files,
+    find_semantic_matches,
+    trace_callers,
+    rank_root_causes,
+    analyze_bug,
+)
+
+# Fetch and parse (with caching)
+issue = fetch_and_parse_issue("owner", "repo", 1234)
+print(issue.extracted_paths)   # file paths found in body
+print(issue.extracted_funcs)   # function names from stack traces
+print(issue.linked_commits)    # merge commit SHAs from linked PRs
+
+# Match paths to graph nodes
+path_matches = resolve_paths_to_files(cs, issue.extracted_paths)
+
+# Semantic search using issue description
+semantic_matches = find_semantic_matches(cs, f"{issue.title}\n{issue.body}")
+
+# Trace callers of mentioned functions
+caller_traces = trace_callers(cs, issue.extracted_funcs, max_hops=2)
+
+# Combine into ranked candidates
+candidates = rank_root_causes(path_matches, semantic_matches, caller_traces, issue.extracted_funcs)
+```
+
+### Scoring System
+
+Root cause candidates are scored by combining multiple signals:
+
+| Signal              | Score     | Description                                                |
+| ------------------- | --------- | ---------------------------------------------------------- |
+| Direct mention      | +1.0      | Function name appears in issue body/stack trace            |
+| File path match     | +0.8      | Function is in a file mentioned in the issue               |
+| Semantic match      | +score    | Raw cosine similarity (0.0-1.0) from `cross_locate`        |
+| Caller relationship | +0.5/hops | Function calls a mentioned function (decays with distance) |
+
+### Issue Cache
+
+Parsed issues are cached at `~/.codegraph/issue_cache/{owner}_{repo}_{number}.json`. Cache hits skip the GitHub API call entirely (sub-millisecond). To force a refresh, pass `use_cache=False` or use `--no-cache` on CLI.
+
+```python
+from codegraph.issue_cache import clear_cache
+clear_cache(owner="openclaw", repo="openclaw")  # clear specific repo
+clear_cache()  # clear all
+```
+
+### Stack Trace Parsing
+
+The parser automatically extracts file paths and function names from stack traces in Python, C/C++, JavaScript/Node.js, Go, and Rust formats. It also extracts `func_name()` references in backticks and inline code.

@@ -147,3 +147,26 @@ These patterns combine multiple query types for deeper insights:
 **Dependency Archaeology**: Find zero fan-in functions (dead code candidates), check `is_historical` for ghost functions, then trace which commits removed their callers — this tells you when and why code became dead.
 
 **Incremental Investigation**: Start with `cs.summary()` for high-level coverage, then check backfill state. If `MODIFIES` is sparse, use `TOUCHES`-based (file-level) analysis instead of function-level.
+
+## Important Filters for Cypher
+
+When writing Cypher queries, these filters prevent misleading results:
+
+- **`f.is_historical = 0`** — exclude deleted/renamed functions that are still in the graph as historical records
+- **`f.is_external = 0`** (on File nodes) — exclude system headers/library files
+- **`c.version_tag = 'bf'`** — only backfilled commits have `MODIFIES` edges; non-backfilled commits only have `TOUCHES` (file-level) edges
+- **Always use `LIMIT`** — large codebases can return hundreds of thousands of rows
+
+## Checking Data Availability
+
+Before running evolution queries, check what's available:
+
+```python
+# How many commits are indexed?
+list(cs.conn.execute("MATCH (c:Commit) RETURN count(c)"))
+
+# How many have MODIFIES edges (backfilled)?
+list(cs.conn.execute("MATCH (c:Commit) WHERE c.version_tag = 'bf' RETURN count(c)"))
+```
+
+If no commits exist, evolution methods will return empty results — guide the user to run `codegraph ingest` first. If commits exist but aren't backfilled, `TOUCHES` (file-level) queries still work but `MODIFIES` (function-level) queries won't.

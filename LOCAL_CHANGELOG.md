@@ -5,6 +5,52 @@
 
 ---
 
+## v0.21.2-study.10 (2026-08-03)
+
+**主题：门禁缺口修复（审计驱动）+ Progress Panel 新增 Better Harness 列**
+
+### 背景
+
+对 fork 跑了第一次完整 `/better-harness` 五维审计（任务理解 70 / 可控执行
+72 / 改动验证 62 / 可靠交付 64 / 经验沉淀 62，Operationalize 轨道），审计
+「吃自己的狗粮」发现刚接入的门禁有两处真实缺口；本版本修复这两处，并把
+审计结果可视化到 Progress Panel。
+
+### 变更内容
+
+#### 1. 门禁缺口修复（fix，审计 Finding #1/#2）
+
+- **修改** `scripts/better-harness-gate.mjs`：
+  - **maintainer 豁免**——提交作者命中 `maintainers` 名单时，核心模块命中
+    与安全代码移除阻断降级为警告；critical 影响半径对所有人保持客观阻断。
+    解决了与 AGENTS.md「maintainer 豁免」政策的冲突（此前合法 core 改动被迫
+    常态化 `--no-verify`）
+  - **fail-open 兜底**——Better Harness 缺失或分析报错时，触及 core 区的改动
+    给出醒目告警而非静默放行；非 core 改动仍 fail-open
+  - 说明：blast-radius 的 `securityRemovals` 是关键词启发式，对门禁/安全代码
+    自身的编辑会频繁误报，故对 maintainer 豁免（已记录于脚本注释与 AGENTS.md）
+- **修改** `.better-harness/blast-radius.json`：新增 `maintainers: ["tanjiawen"]`
+- **修改** `AGENTS.md`：step 6 同步豁免已编码 + 依赖缺失 core 告警的说明
+
+#### 2. Progress Panel 新增 Better Harness 列（feat）
+
+- **新增** `packages/cli/src/ui/utils/progress-insights.ts` 的
+  `buildBetterHarnessPanel()`：解析审计 `findings.json` 为五维分数 + findings
+  概览（数量与严重度分布），含规范中文维度标签
+- **新增** `packages/cli/src/ui/hooks/use-better-harness-panel.ts`：定位
+  `.qwen/better-harness/` 下最新 `findings.json` 并每 5s 轮询；未审计时返回
+  undefined（面板显示占位）
+- **修改** `packages/cli/src/ui/components/ProgressPanel.tsx`：在原「智能体
+  状态 / 思考链」两列旁新增第三列显示五维分数；窄终端降级为下方整行
+- **新增** `progress-insights.test.ts` 9 个单测（共 35 个全过）
+
+#### 3. 审计产物（不入库）
+
+- 首次完整审计报告渲染于 `.qwen/better-harness/run-20260803-000737/`
+  （report.html / report.md / findings.json），该目录 git-ignored
+
+---
+
 ## v0.21.2-study.9 (2026-08-03)
 
 **主题：接入 Better Harness 强制门禁——任何代码改动须过三层检查**

@@ -1,5 +1,6 @@
 {
   "baseRef": "HEAD",
+  "maintainers": ["tanjiawen"],
   "thresholds": {
     "changedFiles": { "warn": 20, "high": 40, "critical": 60 },
     "changedLines": { "warn": 600, "high": 1500, "critical": 3000 },

@@ -217,11 +217,17 @@ npm run preflight  # Full check: clean → install → format → lint → build
    ending a turn that changed source code with unresolved error-level
    findings; (b) the git pre-commit hook (`scripts/better-harness-gate.mjs`)
    hard-blocks commits that are critical-severity, remove security code, or
-   touch high/critical-risk core areas. On top of these per-change gates, run
-   the full five-dimension `/better-harness` audit at each milestone (before a
-   PR or release) and keep its report as a deliverable. Thresholds live in
-   `.better-harness/blast-radius.json`; do not weaken them to pass a check —
-   fix the change or add the missing test evidence instead.
+   touch high/critical-risk core areas. The maintainer exemption is encoded in
+   the gate: a commit whose author matches `maintainers` in
+   `.better-harness/blast-radius.json` has security-removal and core-area
+   blocks downgraded to warnings (critical-severity blocks are never
+   exempted). If Better Harness is not installed, the gate fails open but
+   still warns loudly on core-area changes rather than passing silently. On
+   top of these per-change gates, run the full five-dimension
+   `/better-harness` audit at each milestone (before a PR or release) and
+   keep its report as a deliverable. Thresholds and the maintainer list live
+   in `.better-harness/blast-radius.json`; do not weaken them to pass a check
+   — fix the change or add the missing test evidence instead.
 
 ### Feature development
 

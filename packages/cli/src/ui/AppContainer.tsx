@@ -1717,64 +1717,15 @@ export const AppContainer = (props: AppContainerProps) => {
           // cleanup because cleanup has a 2 s per-function ceiling that is
           // too tight for an LLM round-trip.
           try {
-            const { generateSnapshotSummary, buildFallbackSummary } =
-              await import('@qwen-code/qwen-code-core');
+            const { generateSnapshotSummary } = await import(
+              '@qwen-code/qwen-code-core'
+            );
             const { runSideQuery } = await import('@qwen-code/qwen-code-core');
-            const snapshotData = {
-              version: 1 as const,
-              sessionId: sessionStats.sessionId,
-              timestamp: new Date().toISOString(),
-              projectRoot: config.getTargetDir(),
-              git: { branch: '', lastCommit: '', dirtyFiles: 0 },
-              task: {
-                todos: snapshotTodosRef.current.map((t) => ({
-                  content: t.content,
-                  status: t.status,
-                })),
-                lastUserPrompt: snapshotLastPromptRef.current.slice(0, 200),
-              },
-              files: { modified: [] },
-              metrics: {
-                turnCount: sessionStats.promptCount,
-                totalTokens: 0,
-                elapsedSeconds: 0,
-                toolCalls: 0,
-              },
-              summary: null,
-            };
             const ac = new AbortController();
-            debugLogger.debug('Session snapshot summary: starting LLM call');
-            const summary = await generateSnapshotSummary(snapshotData, {
-              generate: async (prompt: string) => {
-                const result = await runSideQuery(config, {
-                  purpose: 'snapshot-summary',
-                  contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                  abortSignal: ac.signal,
-                  config: { maxOutputTokens: 200, temperature: 0.3 },
-                  maxAttempts: 1,
-                });
-                return result.text;
-              },
-            });
-            ac.abort();
-            if (summary) {
-              debugLogger.debug(
-                `Session snapshot summary: LLM generated ${summary.length} chars`,
-              );
-              snapshotSummaryRef.current = summary;
-            } else {
-              debugLogger.debug(
-                'Session snapshot summary: LLM returned null, using template fallback',
-              );
-              snapshotSummaryRef.current = buildFallbackSummary(snapshotData);
-            }
-          } catch (err) {
-            debugLogger.error('Session snapshot summary failed:', err);
-            try {
-              const { buildFallbackSummary } = await import(
-                '@qwen-code/qwen-code-core'
-              );
-              snapshotSummaryRef.current = buildFallbackSummary({
+            const timer = setTimeout(() => ac.abort(), 3000);
+            timer.unref?.();
+            const summary = await generateSnapshotSummary(
+              {
                 version: 1,
                 sessionId: sessionStats.sessionId,
                 timestamp: new Date().toISOString(),
@@ -1795,10 +1746,25 @@ export const AppContainer = (props: AppContainerProps) => {
                   toolCalls: 0,
                 },
                 summary: null,
-              });
-            } catch {
-              // Truly best-effort — summary stays null.
-            }
+              },
+              {
+                generate: async (prompt: string) => {
+                  const result = await runSideQuery(config, {
+                    purpose: 'snapshot-summary',
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    abortSignal: ac.signal,
+                    config: { maxOutputTokens: 200, temperature: 0.3 },
+                    maxAttempts: 1,
+                  });
+                  return result.text;
+                },
+              },
+              3000,
+            );
+            clearTimeout(timer);
+            snapshotSummaryRef.current = summary;
+          } catch {
+            // Best-effort — summary stays null.
           }
           await runExitCleanup();
           process.exit(0);

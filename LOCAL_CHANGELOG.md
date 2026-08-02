@@ -5,6 +5,51 @@
 
 ---
 
+## v0.21.2-study.9 (2026-08-03)
+
+**主题：接入 Better Harness 强制门禁——任何代码改动须过三层检查**
+
+### 背景
+
+此前 fork 上多次出现 agent 失控改动与崩溃。研读阿里云 Qoder 团队开源的
+Better Harness 后，决定将其接入本 fork 作为强制门禁：先规划、再编码，但
+任何代码改动都必须经过 Better Harness 的检查与约束才能通过。落地分三层
+（pre-commit 硬门禁 / Stop 钩子 / 里程碑全审计），先在本 fork 试点，阈值
+放宽起步、跑顺后再收紧。
+
+### 变更内容
+
+#### 1. pre-commit 硬门禁（本仓库）
+
+- **新增** `scripts/better-harness-gate.mjs`：调用 Better Harness 的
+  blast-radius 影响半径分析，对 critical 级改动、删除安全相关代码、改动
+  high/critical-risk 核心模块的提交硬阻断（exit 1）；fail-open 设计，
+  Better Harness 缺失或分析报错时放行并告警，不会卡死提交
+- **修改** `.husky/pre-commit`：在 lint-staged 门禁后追加 Better Harness
+  门禁
+
+#### 2. 门禁配置
+
+- **新增** `.better-harness/blast-radius.json`：放宽 monorepo 阈值
+  （changedFiles critical 60、changedLines critical 3000 等），并将
+  `packages/core/src/**` 与 `auth/providers/models/config/tools/services`
+  标为 high-risk 核心模块（贴合 AGENTS.md 的 maintainer-only 规则）
+
+#### 3. 流程文档
+
+- **修改** `AGENTS.md`：通用工作流新增第 6 步「Better Harness gate
+  (mandatory)」，规定每次改动受 pre-commit + Stop 钩子约束，里程碑/PR 前
+  必须运行完整 `/better-harness` 五维审计并将报告作为交付物；不得为过检查
+  而调低阈值
+
+#### 4. Stop 钩子层（全局 `~/.qwen`，不在本仓库内）
+
+- **新增** `~/.qwen/scripts/better-harness-stop-gate.sh`：本回合有源码改动
+  且 review-trigger 报出 error 级 finding 时，阻止 agent 结束回合；已注册进
+  `~/.qwen/settings.json` 的 Stop 数组（与 changelog-version-guard 并列）
+
+---
+
 ## v0.21.2-study.8 (2026-08-02)
 
 **主题：回滚 Session Snapshot 功能**

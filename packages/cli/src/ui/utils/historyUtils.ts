@@ -93,6 +93,7 @@ export function isSyntheticHistoryItem(
     case 'arena_session_complete':
     case 'goal_status':
     case 'dashboard':
+    case 'goal_state':
       return false;
 
     default: {

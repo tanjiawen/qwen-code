@@ -14,6 +14,8 @@ import type {
   ToolResultDisplay,
   AgentStatus,
   ArenaDiffSummary,
+  GoalSnapshotV2,
+  GoalStateCause,
 } from '@qwen-code/qwen-code-core';
 import type { PartListUnion } from '@google/genai';
 import type { ReactNode } from 'react';
@@ -632,6 +634,7 @@ export type GoalStatusKind =
   | 'cleared'
   | 'failed'
   | 'aborted'
+  | 'paused'
   | 'checking';
 
 export const GOAL_STATUS_KINDS = [
@@ -640,6 +643,7 @@ export const GOAL_STATUS_KINDS = [
   'cleared',
   'failed',
   'aborted',
+  'paused',
   'checking',
 ] as const satisfies readonly GoalStatusKind[];
 
@@ -674,6 +678,12 @@ export type HistoryItemGoalStatus = HistoryItemBase & {
   setAt?: number;
   durationMs?: number;
   lastReason?: string;
+};
+
+export type HistoryItemGoalState = HistoryItemBase & {
+  type: 'goal_state';
+  snapshot: GoalSnapshotV2;
+  cause?: GoalStateCause;
 };
 
 // Using Omit<HistoryItem, 'id'> seems to have some issues with typescript's
@@ -723,7 +733,8 @@ export type HistoryItemWithoutId =
   | HistoryItemStopHookSystemMessage
   | HistoryItemDoctor
   | HistoryItemDiffStats
-  | HistoryItemGoalStatus;
+  | HistoryItemGoalStatus
+  | HistoryItemGoalState;
 
 export type HistoryItem = HistoryItemWithoutId & { id: number };
 
@@ -769,6 +780,7 @@ export enum MessageType {
   NOTIFICATION = 'notification',
   DIFF_STATS = 'diff_stats',
   GOAL_STATUS = 'goal_status',
+  GOAL_STATE = 'goal_state',
   VISION_NOTICE = 'vision_notice',
 }
 

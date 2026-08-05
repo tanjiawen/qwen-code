@@ -6,7 +6,7 @@
 
 import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
@@ -37,12 +37,14 @@ import type {
   GoalTerminalEvent,
   ToolCallRequestInfo,
   ToolCallResponseInfo,
+  ToolExecutionStatus,
   LoopTickResult,
   ToolArtifact,
   VisionBridgeResult,
   MemoryWriteCandidate,
   CronTaskDelivery,
   InvocationContextV1,
+  WorkflowApproval,
 } from '@qwen-code/qwen-code-core';
 import {
   AuthType,
@@ -86,6 +88,7 @@ import {
   NotificationType,
   persistPermissionOutcome,
   createHookOutput,
+  wrapUserPromptSubmitContext,
   generateToolUseId,
   MessageBusType,
   MessageDisplayDispatcher,
@@ -96,6 +99,7 @@ import {
   buildSessionRecoveryPlanFromApiHistory,
   TURN_INTERRUPTION_HISTORY_TAIL_COUNT,
   evaluatePermissionFlow,
+  evaluateToolInvocationGuard,
   getEffectivePermissionForConfirmation,
   needsConfirmation,
   isPlanModeBlocked,
@@ -175,7 +179,7 @@ import { SERVE_CONTROL_EXT_METHODS } from '@qwen-code/acp-bridge/status';
 import { getCommandSubcommandNames } from '../../services/commandMetadata.js';
 import { cleanupReviewWorktreeLeases } from '../../services/review-worktree-lease.js';
 import { getEffectiveSupportedModes } from '../../services/commandUtils.js';
-import { normalizeChannelDeliveryText } from '../../serve/channel-delivery.js';
+import { normalizeChannelDeliveryText } from '../../runtime/channel-delivery.js';
 import { readVoiceModel } from '../../services/voice-settings.js';
 import {
   MAX_AUDIO_BYTES,
@@ -279,6 +283,10 @@ import {
 } from './daemon-todo-stop-guard.js';
 
 const debugLogger = createDebugLogger('SESSION');
+const permissionRequestTails = new WeakMap<
+  AgentSideConnection,
+  Promise<void>
+>();
 const USER_CANCEL_ABORT_REASON = 'qwen:user-cancel';
 const SESSION_DISPOSE_ABORT_REASON = 'qwen:session-dispose';
 const DAEMON_RETRY_META_KEY = 'qwen.daemon.retry';
@@ -414,8 +422,9 @@ type PendingToolResultRecord = {
   toolName: string;
   responseParts: Part[];
   persistedOutputFiles?: string[];
-  metadata: Partial<ToolCallResponseInfo> & {
+  metadata: Omit<Partial<ToolCallResponseInfo>, 'executionStatus'> & {
     status: 'success' | 'error' | 'cancelled';
+    executionStatus: ToolExecutionStatus;
   };
 };
 
@@ -438,6 +447,9 @@ const LOOP_DETECTED_SKIP_MESSAGE =
   'Skipped because loop detection stopped the current turn before this tool call could run.';
 const LOOP_DETECTED_CONTEXT_MESSAGE =
   'System: this turn was terminated because the model exceeded tool-call safety limits. Try a different approach on the next turn.';
+const TOOL_EXECUTION_CANCELLED_MESSAGE = 'Tool execution was cancelled.';
+const TOOL_POST_EXECUTION_CANCELLED_MESSAGE =
+  'The tool had already completed; its output was discarded.';
 
 function createDaemonToolLoopState(): DaemonToolLoopState {
   return {
@@ -457,7 +469,14 @@ function recordDaemonLoopDetected(
   if (!loopState.loopDetected) {
     loopState.loopDetected = true;
     debugLogger.warn(message);
-    logLoopDetected(config, new LoopDetectedEvent(loopType, promptId));
+    try {
+      logLoopDetected(config, new LoopDetectedEvent(loopType, promptId));
+    } catch (error) {
+      debugLogger.debug(
+        '[Session] Failed to record loop detection telemetry',
+        error,
+      );
+    }
   }
   return true;
 }
@@ -917,15 +936,20 @@ function parsePromptChannelDelivery(
 const MAX_NOTIFICATION_QUEUE = 20;
 const MAX_DEFERRED_UNRELATED_CRON_QUEUE = 20;
 
-export function isExistingFile(
+export function resolveExistingFile(
   resolved: string,
-  fileExists: (path: string) => boolean = existsSync,
-  statFile: (path: string) => { isFile(): boolean } = statSync,
-): boolean {
+  resolveRealPath: (path: string) => string = realpathSync,
+  statFile: (path: string) => {
+    isFile(): boolean;
+    isDirectory?(): boolean;
+  } = statSync,
+): string | undefined {
   try {
-    return fileExists(resolved) && statFile(resolved).isFile();
+    const canonicalPath = resolveRealPath(resolved);
+    const stats = statFile(canonicalPath);
+    return stats.isFile() || stats.isDirectory?.() ? canonicalPath : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -1307,6 +1331,11 @@ export class Session implements SessionContext {
   private closeGateCompletion: Promise<void> | null = null;
   private resolveCloseGate: (() => void) | null = null;
   private unsubscribeChatRecordingFailure?: () => void;
+  private readonly workflowApprovalAbortController = new AbortController();
+  private activeTodoPlanRevision?: {
+    planId: string;
+    sourceCallId: string;
+  };
 
   // Modular components
   private readonly historyReplayer: HistoryReplayer;
@@ -1367,6 +1396,131 @@ export class Session implements SessionContext {
     this.installGoalTerminalObserver();
     this.#registerBackgroundNotificationCallbacks();
     this.#registerSubSessionSpawner();
+    this.config
+      .getWorkflowRunRegistry?.()
+      .setApprovalRequestCallback((entry, approval, rawArgs, signal) =>
+        this.#requestWorkflowApproval(entry.runId, approval, rawArgs, signal),
+      );
+  }
+
+  async #requestWorkflowApproval(
+    runId: string,
+    approval: WorkflowApproval,
+    rawArgs: Record<string, unknown>,
+    approvalSignal: AbortSignal,
+  ): Promise<void> {
+    const registry = this.config.getWorkflowRunRegistry();
+    const externalToolCallId = `workflow:${this.sessionId}:${runId}:${approval.approvalId}`;
+    const confirmationDetails = {
+      ...approval.confirmationDetails,
+      onConfirm: async () => {},
+    } as ToolCallConfirmationDetails;
+    const permissionOptions = toPermissionOptions(confirmationDetails, true);
+    const offeredPermissionOptions = permissionOptions.map((option) => ({
+      ...option,
+    }));
+    const content =
+      confirmationDetails.type === 'edit'
+        ? [
+            ...(confirmationDetails.warnings ?? []).map((warning) => ({
+              type: 'content' as const,
+              content: { type: 'text' as const, text: warning },
+            })),
+            ...(confirmationDetails.fileDiff
+              ? [
+                  {
+                    type: 'content' as const,
+                    content: {
+                      type: 'text' as const,
+                      text: confirmationDetails.fileDiff,
+                    },
+                  },
+                ]
+              : []),
+          ]
+        : buildPermissionRequestContent(confirmationDetails);
+    // Resolves against the parent session's registry; per-agent MCP tools
+    // fall back to the bare tool name (the mcp details still carry serverName).
+    const { title, locations, kind } = this.toolCallEmitter.resolveToolMetadata(
+      approval.name,
+      rawArgs,
+    );
+    const params: RequestPermissionRequest = {
+      sessionId: this.sessionId,
+      options: permissionOptions,
+      toolCall: {
+        toolCallId: externalToolCallId,
+        status: 'pending',
+        title,
+        content,
+        locations,
+        kind,
+        rawInput: rawArgs,
+        _meta: { toolName: approval.name, workflowApproval: true },
+      },
+    };
+    const signal = AbortSignal.any([
+      this.workflowApprovalAbortController.signal,
+      approvalSignal,
+    ]);
+
+    try {
+      const response = await this.#requestPermissionQueued(params, signal);
+      const outcome = resolvePermissionOutcome(
+        response,
+        offeredPermissionOptions,
+      );
+      const resolved = await registry.resolvePendingApproval(
+        runId,
+        approval.approvalId,
+        outcome === ToolConfirmationOutcome.ProceedOnce
+          ? outcome
+          : ToolConfirmationOutcome.Cancel,
+        undefined,
+      );
+      await this.#finishWorkflowApprovalToolCall(
+        approval,
+        externalToolCallId,
+        resolved && outcome === ToolConfirmationOutcome.ProceedOnce,
+      );
+    } catch (error) {
+      debugLogger.error('Workflow permission request failed:', error);
+      await registry.resolvePendingApproval(
+        runId,
+        approval.approvalId,
+        ToolConfirmationOutcome.Cancel,
+      );
+      await this.#finishWorkflowApprovalToolCall(
+        approval,
+        externalToolCallId,
+        false,
+      );
+    }
+  }
+
+  async #finishWorkflowApprovalToolCall(
+    approval: WorkflowApproval,
+    externalToolCallId: string,
+    success: boolean,
+  ): Promise<void> {
+    try {
+      await this.sendUpdate({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: externalToolCallId,
+        status: success ? 'completed' : 'failed',
+        content: [],
+        _meta: {
+          toolName: approval.name,
+          workflowApproval: true,
+          approvalOutcome: success ? 'approved' : 'denied',
+        },
+      });
+    } catch (error) {
+      debugLogger.warn(
+        'Failed to finalize workflow approval tool call:',
+        error,
+      );
+    }
   }
 
   #prepareTodoStopGuardForPrompt(
@@ -1492,6 +1646,10 @@ export class Session implements SessionContext {
 
   clearTodoStopGuardTrust(): void {
     this.#clearTodoStopGuardTrustAndDrainAutomaticQueues();
+  }
+
+  clearActiveTodoPlanRevision(): void {
+    this.activeTodoPlanRevision = undefined;
   }
 
   hardSuspendTodoStopGuard(): void {
@@ -1971,6 +2129,10 @@ export class Session implements SessionContext {
     this.unsubscribeChatRecordingFailure?.();
     this.unsubscribeChatRecordingFailure = undefined;
     this.config.setSubSessionSpawner(undefined);
+    this.config
+      .getWorkflowRunRegistry?.()
+      .setApprovalRequestCallback(undefined);
+    this.workflowApprovalAbortController.abort(SESSION_DISPOSE_ABORT_REASON);
     clearGoalTerminalObserver(this.sessionId);
   }
 
@@ -2048,7 +2210,15 @@ export class Session implements SessionContext {
     gaps?: HistoryGap[],
   ): Promise<void> {
     this.primeTurnFromHistory(records);
-    await this.historyReplayer.replay(records, gaps);
+    try {
+      await this.historyReplayer.replay(records, gaps);
+    } finally {
+      // Replayed plan updates re-stamp the revision via sendUpdate, but they
+      // belong to finished cycles; only live updates may bind the next
+      // exit_plan_mode approval, so a replayed session starts text-only —
+      // even when the replay fails part-way.
+      this.activeTodoPlanRevision = undefined;
+    }
   }
 
   rewindToTurn(
@@ -2088,6 +2258,7 @@ export class Session implements SessionContext {
 
     chat.truncateHistory(apiTruncateIndex);
     chat.stripThoughtsFromHistory();
+    this.activeTodoPlanRevision = undefined;
     const preserveQueuedPromptPriority = this.todoStopGuardQueuedPromptPriority;
     const shouldDrainAutomaticQueues =
       (this.todoStopGuard.blocksUnrelatedAutomaticTurns ||
@@ -2153,6 +2324,7 @@ export class Session implements SessionContext {
       .getGeminiClient()!
       .getChat()
       .setHistory(structuredClone(history));
+    this.activeTodoPlanRevision = undefined;
     this.#clearTodoStopGuardTrustAndDrainAutomaticQueues();
   }
 
@@ -2852,10 +3024,15 @@ export class Session implements SessionContext {
                 return { stopReason: 'end_turn' };
               }
 
-              // Add additional context from hooks to the request
+              // Add additional context from hooks to the request, wrapped in
+              // the reserved tag so it stays distinguishable from
+              // user-authored text (same shape as the interactive path).
               const additionalContext = hookOutput?.getAdditionalContext();
               if (additionalContext) {
-                parts = [...parts, { text: additionalContext }];
+                parts = [
+                  ...parts,
+                  { text: wrapUserPromptSubmitContext(additionalContext) },
+                ];
               }
             }
 
@@ -3205,7 +3382,10 @@ export class Session implements SessionContext {
                         onFullTurnModel,
                       ),
                   );
-                  if (toolRun.stopAfterPermissionCancel) {
+                  if (
+                    toolRun.stopAfterPermissionCancel ||
+                    pendingSend.signal.aborted
+                  ) {
                     this.todoStopGuard.suspend();
                     await this.#preserveStoppedToolRun(
                       toolRun,
@@ -4152,7 +4332,11 @@ export class Session implements SessionContext {
               options.onFullTurnModel,
             ),
         );
-        if (toolRun.stopAfterPermissionCancel || toolRun.loopDetected) {
+        if (
+          toolRun.stopAfterPermissionCancel ||
+          toolRun.loopDetected ||
+          pendingSend.signal.aborted
+        ) {
           this.todoStopGuard.suspend();
           await this.#preserveStoppedToolRun(toolRun, pendingSend.signal);
           return {
@@ -4281,7 +4465,36 @@ export class Session implements SessionContext {
       update,
     };
 
+    if (update.sessionUpdate === 'plan') {
+      // Clear before delivery: a plan update the client never receives
+      // must not stay bound to the next exit_plan_mode approval. The
+      // capture below re-stamps only after delivery succeeds.
+      this.activeTodoPlanRevision = undefined;
+    }
     await this.client.sessionUpdate(params);
+    if (update.sessionUpdate === 'plan') {
+      this.#captureTodoPlanRevision(update);
+    }
+  }
+
+  #captureTodoPlanRevision(
+    update: Extract<SessionUpdate, { sessionUpdate: 'plan' }>,
+  ): void {
+    const meta = isRecord(update['_meta']) ? update['_meta'] : undefined;
+    const plan = isRecord(meta?.['qwenTodoPlan'])
+      ? meta['qwenTodoPlan']
+      : undefined;
+    const transcript = isRecord(meta?.['qwenTranscript'])
+      ? meta['qwenTranscript']
+      : undefined;
+    const planId = plan?.['id'];
+    const sourceCallId = transcript?.['planToolCallId'];
+    this.activeTodoPlanRevision =
+      typeof planId === 'string' &&
+      typeof sourceCallId === 'string' &&
+      update.entries.length > 0
+        ? { planId, sourceCallId }
+        : undefined;
   }
 
   #scheduleChannelDelivery(params: Record<string, unknown>): void {
@@ -4415,11 +4628,15 @@ export class Session implements SessionContext {
             compressed.triggerReason === 'image_overflow'
               ? `accumulated enough tool screenshots to trigger compaction for ${this.config.getModel()}`
               : `approached the input token limit for ${this.config.getModel()}`;
+          const warningSuffix = compressed.warning
+            ? `\n⚠️ ${compressed.warning}`
+            : '';
           compressionDiagnostic =
             `IMPORTANT: This conversation ${reasonClause}. ` +
             `A compressed context will be sent for future messages (compressed from: ` +
             `${compressed.originalTokenCount ?? 'unknown'} to ` +
-            `${compressed.newTokenCount ?? 'unknown'} tokens).`;
+            `${compressed.newTokenCount ?? 'unknown'} tokens).` +
+            warningSuffix;
         }
       } catch (compressionError) {
         if (abortSignal.aborted) {
@@ -5507,7 +5724,7 @@ export class Session implements SessionContext {
                     functionCalls,
                     toolLoopState,
                   );
-                  if (toolRun.stopAfterPermissionCancel) {
+                  if (toolRun.stopAfterPermissionCancel || ac.signal.aborted) {
                     this.todoStopGuard.suspend();
                     await this.#preserveStoppedToolRun(toolRun, ac.signal);
                     return;
@@ -6020,7 +6237,7 @@ export class Session implements SessionContext {
                 functionCalls,
                 toolLoopState,
               );
-              if (toolRun.stopAfterPermissionCancel) {
+              if (toolRun.stopAfterPermissionCancel || ac.signal.aborted) {
                 this.todoStopGuard.suspend();
                 await this.#preserveStoppedToolRun(toolRun, ac.signal);
                 await this.#emitBackgroundNotificationEndTurn(
@@ -6167,8 +6384,15 @@ export class Session implements SessionContext {
     }
   }
 
-  async refreshSkillsFromSettings(): Promise<void> {
-    this.settings.reloadScopeFromDisk(SettingScope.Workspace);
+  async refreshSkillsFromSettings(
+    options: {
+      reloadSettings?: boolean;
+      notifyConfigChanged?: boolean;
+    } = {},
+  ): Promise<void> {
+    if (options.reloadSettings ?? true) {
+      this.reloadSkillSettings();
+    }
     const skillManager = this.config.getSkillManager();
     let updateFailed = false;
     let updateError: unknown;
@@ -6178,7 +6402,7 @@ export class Session implements SessionContext {
       updateFailed = true;
       updateError = error;
     }
-    if (skillManager) {
+    if (skillManager && (options.notifyConfigChanged ?? true)) {
       try {
         skillManager.suppressNextSlashReload();
         await skillManager.notifyConfigChanged();
@@ -6191,6 +6415,10 @@ export class Session implements SessionContext {
       }
     }
     if (updateFailed) throw updateError;
+  }
+
+  reloadSkillSettings(): void {
+    this.settings.reloadScopeFromDisk(SettingScope.Workspace);
   }
 
   private async sendAvailableCommandsUpdateOrThrow(): Promise<void> {
@@ -6225,6 +6453,40 @@ export class Session implements SessionContext {
     return this.client.requestPermission(params);
   }
 
+  #requestPermissionQueued(
+    params: RequestPermissionRequest,
+    signal: AbortSignal,
+  ): Promise<RequestPermissionResponse> {
+    const prior = permissionRequestTails.get(this.client) ?? Promise.resolve();
+    const transportRequest = prior.then(() =>
+      signal.aborted
+        ? requestPermissionWithAbort(this.client, params, signal)
+        : this.client.requestPermission(params),
+    );
+    // Advance the queue when the transport settles OR when the caller's
+    // signal aborts — an orphaned RPC must not wedge later requests.
+    let abortListener: (() => void) | undefined;
+    const tail = Promise.race([
+      transportRequest.then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise<void>((resolve) => {
+        if (signal.aborted) return resolve();
+        abortListener = () => resolve();
+        signal.addEventListener('abort', abortListener, { once: true });
+      }),
+    ]).finally(() => {
+      if (abortListener) signal.removeEventListener('abort', abortListener);
+    });
+    permissionRequestTails.set(this.client, tail);
+    return requestPermissionWithAbort(
+      { requestPermission: () => transportRequest },
+      params,
+      signal,
+    );
+  }
+
   /**
    * Sets the approval mode for the current session.
    * Maps ACP approval mode values to core ApprovalMode enum.
@@ -6253,8 +6515,14 @@ export class Session implements SessionContext {
         `Unknown approval mode: ${params.modeId}`,
       );
     }
+    const previousApprovalMode = this.config.getApprovalMode();
     this.config.setApprovalMode(approvalMode);
     if (approvalMode === ApprovalMode.PLAN) {
+      if (previousApprovalMode !== ApprovalMode.PLAN) {
+        // A redundant plan re-select keeps the revision captured by the
+        // live cycle; only a fresh entry starts a new approval cycle.
+        this.activeTodoPlanRevision = undefined;
+      }
       this.clearTodoStopGuardTrust();
     }
 
@@ -6538,9 +6806,10 @@ export class Session implements SessionContext {
           metadata: {
             callId,
             status: 'error',
+            executionStatus: 'not_started',
             resultDisplay: undefined,
             error,
-            errorType,
+            errorType: errorType ?? ToolErrorType.EXECUTION_DENIED,
           },
         });
         if (emitStart) {
@@ -6569,7 +6838,12 @@ export class Session implements SessionContext {
       return await finalizeRunToolResult({
         parts: await Promise.all(
           dedupedFunctionCalls.map((fc) =>
-            recordSkippedToolCall(fc, LOOP_DETECTED_SKIP_MESSAGE, false),
+            recordSkippedToolCall(
+              fc,
+              LOOP_DETECTED_SKIP_MESSAGE,
+              false,
+              ToolErrorType.UNKNOWN,
+            ),
           ),
         ),
         stopAfterPermissionCancel: false,
@@ -6634,38 +6908,48 @@ export class Session implements SessionContext {
 
     const emitDuplicateBatch = async (batch: DuplicateBatch): Promise<void> => {
       const { request, response } = batch;
-      if (request.name === ToolNames.TODO_WRITE) {
-        const provenance = ToolCallEmitter.resolveToolProvenance(request.name);
-        await this.sendUpdate({
-          sessionUpdate: 'tool_call_update',
-          toolCallId: response.callId,
-          status: 'failed',
-          content: [
-            {
-              type: 'content',
-              content: {
-                type: 'text',
-                text: response.error?.message ?? String(response.resultDisplay),
+      try {
+        if (request.name === ToolNames.TODO_WRITE) {
+          const provenance = ToolCallEmitter.resolveToolProvenance(
+            request.name,
+          );
+          await this.sendUpdate({
+            sessionUpdate: 'tool_call_update',
+            toolCallId: response.callId,
+            status: 'failed',
+            content: [
+              {
+                type: 'content',
+                content: {
+                  type: 'text',
+                  text:
+                    response.error?.message ?? String(response.resultDisplay),
+                },
               },
+            ],
+            rawOutput: response.resultDisplay,
+            _meta: {
+              toolName: request.name,
+              provenance: provenance.provenance,
+              ...(provenance.serverId ? { serverId: provenance.serverId } : {}),
             },
-          ],
-          rawOutput: response.resultDisplay,
-          _meta: {
+          });
+        } else {
+          await this.toolCallEmitter.emitResult({
+            callId: response.callId,
             toolName: request.name,
-            provenance: provenance.provenance,
-            ...(provenance.serverId ? { serverId: provenance.serverId } : {}),
-          },
-        });
-      } else {
-        await this.toolCallEmitter.emitResult({
-          callId: response.callId,
-          toolName: request.name,
-          args: request.args,
-          message: response.responseParts,
-          resultDisplay: response.resultDisplay,
-          error: response.error,
-          success: false,
-        });
+            args: request.args,
+            message: response.responseParts,
+            resultDisplay: response.resultDisplay,
+            error: response.error,
+            success: false,
+          });
+        }
+      } catch (emitError) {
+        debugLogger.debug(
+          '[Session.runToolCalls] Failed to emit duplicate tool update',
+          emitError,
+        );
       }
       queueToolResultRecord(batch.fc, {
         callId: response.callId,
@@ -6675,6 +6959,7 @@ export class Session implements SessionContext {
         metadata: {
           callId: response.callId,
           status: 'error',
+          executionStatus: response.executionStatus ?? 'not_started',
           resultDisplay: response.resultDisplay,
           error: response.error,
           errorType: response.errorType,
@@ -6724,10 +7009,13 @@ export class Session implements SessionContext {
       parts: Part[],
       fc: FunctionCall,
       message = PERMISSION_CANCEL_SKIP_MESSAGE,
+      errorType?: ToolErrorType,
     ) => {
       const startIndex = dedupedFunctionCalls.indexOf(fc) + 1;
       for (const remainingCall of dedupedFunctionCalls.slice(startIndex)) {
-        parts.push(await recordSkippedToolCall(remainingCall, message));
+        parts.push(
+          await recordSkippedToolCall(remainingCall, message, true, errorType),
+        );
       }
     };
     const memoryWriteCandidates: MemoryWriteCandidate[] = [];
@@ -6769,7 +7057,12 @@ export class Session implements SessionContext {
           if (results[i]) continue;
           results[i] = {
             parts: [
-              await recordSkippedToolCall(calls[i], LOOP_DETECTED_SKIP_MESSAGE),
+              await recordSkippedToolCall(
+                calls[i],
+                LOOP_DETECTED_SKIP_MESSAGE,
+                true,
+                ToolErrorType.UNKNOWN,
+              ),
             ],
             stopAfterPermissionCancel: false,
             loopDetected: true,
@@ -6945,6 +7238,7 @@ export class Session implements SessionContext {
               parts,
               batch.calls[batch.calls.length - 1],
               LOOP_DETECTED_SKIP_MESSAGE,
+              ToolErrorType.UNKNOWN,
             );
             return await finalizeRunToolResult({
               parts,
@@ -6981,7 +7275,12 @@ export class Session implements SessionContext {
             parts.push(...r.parts);
             collectMemoryWriteCandidates(r);
             if (r.loopDetected) {
-              await appendSkippedAfter(parts, fc, LOOP_DETECTED_SKIP_MESSAGE);
+              await appendSkippedAfter(
+                parts,
+                fc,
+                LOOP_DETECTED_SKIP_MESSAGE,
+                ToolErrorType.UNKNOWN,
+              );
               return await finalizeRunToolResult({
                 parts,
                 stopAfterPermissionCancel: false,
@@ -7057,6 +7356,7 @@ export class Session implements SessionContext {
       fc: FunctionCall,
       message?: string,
       emitStart?: boolean,
+      errorType?: ToolErrorType,
     ) => Promise<Part>,
     queueToolResultRecord?: QueueToolResultRecord,
     generatedCallId?: string,
@@ -7064,11 +7364,22 @@ export class Session implements SessionContext {
   ): Promise<RunToolResult> {
     const callId = fc.id ?? generatedCallId ?? `${fc.name}-${Date.now()}`;
     let args = (fc.args ?? {}) as Record<string, unknown>;
+    let executionStatus: ToolExecutionStatus = 'not_started';
+    let executionErrorType: ToolErrorType | undefined;
+    let executeReturned = false;
+    let terminalStatus: 'success' | 'error' | 'cancelled' | undefined;
+    let toolType: 'native' | 'mcp' = 'native';
+    let mcpServerName: string | undefined = undefined;
     if (toolLoopState?.loopDetected) {
       return {
         parts: [
           recordSkippedToolCall
-            ? await recordSkippedToolCall(fc, LOOP_DETECTED_SKIP_MESSAGE, false)
+            ? await recordSkippedToolCall(
+                fc,
+                LOOP_DETECTED_SKIP_MESSAGE,
+                false,
+                ToolErrorType.UNKNOWN,
+              )
             : {
                 functionResponse: {
                   id: callId,
@@ -7097,30 +7408,46 @@ export class Session implements SessionContext {
       removeAgentToolAbortPropagation = undefined;
     };
 
-    const errorResponse = (error: Error) => {
+    const errorResponse = (
+      error: Error,
+      toolName: string,
+      status: 'error' | 'cancelled',
+      errorType: ToolErrorType | undefined,
+    ) => {
       const durationMs = Date.now() - startTime;
-      logToolCall(this.config, {
-        'event.name': 'tool_call',
-        'event.timestamp': new Date().toISOString(),
-        prompt_id: promptId,
-        function_name: fc.name ?? '',
-        function_args: args,
-        duration_ms: durationMs,
-        // An aborted signal means the call was cancelled, not a genuine error.
-        status: activeToolAbortSignal.aborted ? 'cancelled' : 'error',
-        success: false,
-        error: error.message,
-        tool_type:
-          typeof tool !== 'undefined' && tool instanceof DiscoveredMCPTool
-            ? 'mcp'
-            : 'native',
-      });
+      try {
+        logToolCall(this.config, {
+          'event.name': 'tool_call',
+          'event.timestamp': new Date().toISOString(),
+          call_id: callId,
+          prompt_id: promptId,
+          function_name: toolName,
+          function_args: args,
+          duration_ms: durationMs,
+          status,
+          execution_status: executionStatus,
+          success: false,
+          ...(status === 'error'
+            ? {
+                error: error.message,
+                error_type: errorType,
+              }
+            : {}),
+          tool_type: toolType,
+          mcp_server_name: mcpServerName,
+        });
+      } catch (telemetryError) {
+        debugLogger.debug(
+          '[Session.runTool] Failed to record terminal tool telemetry',
+          telemetryError,
+        );
+      }
 
       return [
         {
           functionResponse: {
             id: callId,
-            name: fc.name ?? '',
+            name: toolName,
             response: { error: error.message },
           },
         },
@@ -7130,34 +7457,54 @@ export class Session implements SessionContext {
     const earlyErrorResponse = async (
       error: Error,
       toolName = fc.name ?? 'unknown_tool',
-      opts?: {
+      opts: {
+        status: 'error' | 'cancelled';
+        errorType: ToolErrorType | undefined;
+        executionStatus: ToolExecutionStatus;
         recordInvalidToolParams?: boolean;
         stopAfterPermissionCancel?: boolean;
       },
     ) => {
-      spanError = error.message;
+      executionStatus = opts.executionStatus;
+      terminalStatus = opts.status;
+      spanError = opts.status === 'error' ? error.message : undefined;
       cleanupAgentToolResources();
       if (toolName !== ToolNames.TODO_WRITE) {
-        await this.toolCallEmitter.emitError(callId, toolName, error);
+        try {
+          await this.toolCallEmitter.emitError(callId, toolName, error);
+        } catch (emitError) {
+          debugLogger.debug(
+            '[Session.runTool] Failed to emit terminal tool update',
+            emitError,
+          );
+        }
       }
 
-      const errorParts = errorResponse(error);
+      const errorParts = errorResponse(
+        error,
+        toolName,
+        opts.status,
+        opts.errorType,
+      );
       queueToolResultRecord?.(fc, {
         callId,
         toolName,
         responseParts: errorParts,
         metadata: {
           callId,
-          status: 'error',
+          status: opts.status,
+          executionStatus,
           resultDisplay: undefined,
-          error,
-          errorType: undefined,
+          error: opts.status === 'error' ? error : undefined,
+          errorType: opts.status === 'error' ? opts.errorType : undefined,
         },
       });
       const loopDetected =
-        opts?.recordInvalidToolParams === true &&
+        opts.recordInvalidToolParams === true &&
         !activeToolAbortSignal.aborted &&
-        !opts?.stopAfterPermissionCancel &&
+        // A permission cancellation is the user declining, not the model
+        // re-sending invalid params, so it must not feed loop detection.
+        !opts.stopAfterPermissionCancel &&
         recordDaemonInvalidToolParams(
           this.config,
           promptId,
@@ -7167,15 +7514,40 @@ export class Session implements SessionContext {
         );
       return {
         parts: errorParts,
-        stopAfterPermissionCancel: opts?.stopAfterPermissionCancel ?? false,
+        stopAfterPermissionCancel: opts.stopAfterPermissionCancel ?? false,
         loopDetected,
       };
     };
 
+    const cancelBeforeExecutionIfAborted = (
+      toolName = fc.name ?? 'unknown_tool',
+    ) =>
+      activeToolAbortSignal.aborted
+        ? earlyErrorResponse(
+            new Error('Tool call was cancelled before execution.'),
+            toolName,
+            {
+              status: 'cancelled',
+              errorType: undefined,
+              executionStatus: 'not_started',
+            },
+          )
+        : undefined;
+
+    const initialCancellation = cancelBeforeExecutionIfAborted();
+    if (initialCancellation) return initialCancellation;
+
     if (!fc.name) {
-      return earlyErrorResponse(new Error('Missing function name'), undefined, {
-        recordInvalidToolParams: true,
-      });
+      return earlyErrorResponse(
+        new Error('Missing function name'),
+        'unknown_tool',
+        {
+          status: 'error',
+          errorType: ToolErrorType.INVALID_TOOL_PARAMS,
+          executionStatus: 'not_started',
+          recordInvalidToolParams: true,
+        },
+      );
     }
 
     const toolName = fc.name;
@@ -7186,9 +7558,17 @@ export class Session implements SessionContext {
       return earlyErrorResponse(
         new Error(`Tool "${toolName}" not found in registry.`),
         toolName,
-        { recordInvalidToolParams: true },
+        {
+          status: 'error',
+          errorType: ToolErrorType.TOOL_NOT_REGISTERED,
+          executionStatus: 'not_started',
+          recordInvalidToolParams: true,
+        },
       );
     }
+    toolType = tool instanceof DiscoveredMCPTool ? 'mcp' : 'native';
+    mcpServerName =
+      tool instanceof DiscoveredMCPTool ? tool.serverName : undefined;
     const policyToolName = tool.name;
     const originalPolicyRequestArgs =
       policyToolName === ToolNames.SHELL || policyToolName === ToolNames.MONITOR
@@ -7209,16 +7589,25 @@ export class Session implements SessionContext {
       tool.description,
       promptId,
     );
-    let spanSuccess = false;
-
     try {
       return await runInToolSpanContext(toolSpan, async () => {
+        const entryCancellation = cancelBeforeExecutionIfAborted(toolName);
+        if (entryCancellation) return entryCancellation;
+
         // ---- L1: Tool enablement check ----
         const pm = this.config.getPermissionManager?.();
-        if (pm && !(await pm.isToolEnabled(policyToolName))) {
+        const toolEnabled = pm ? await pm.isToolEnabled(policyToolName) : true;
+        const enablementCancellation = cancelBeforeExecutionIfAborted(toolName);
+        if (enablementCancellation) return enablementCancellation;
+        if (pm && !toolEnabled) {
           return earlyErrorResponse(
             new Error(`Tool "${toolName}" is disabled.`),
             toolName,
+            {
+              status: 'error',
+              errorType: ToolErrorType.EXECUTION_DENIED,
+              executionStatus: 'not_started',
+            },
           );
         }
 
@@ -7260,12 +7649,10 @@ export class Session implements SessionContext {
         let toolBuildSucceeded = false;
         try {
           const invocation = tool.build(args);
-          if (policyToolName === ToolNames.MONITOR) {
-            const callIdAware = invocation as {
-              setCallId?: (id: string) => void;
-            };
-            callIdAware.setCallId?.(callId);
-          }
+          const callIdAware = invocation as {
+            setCallId?: (id: string) => void;
+          };
+          callIdAware.setCallId?.(callId);
           toolBuildSucceeded = true;
 
           // Production AgentTool always initializes `eventEmitter` on its
@@ -7296,6 +7683,7 @@ export class Session implements SessionContext {
                 agentToolAbortController?.abort(USER_CANCEL_ABORT_REASON);
                 onStopAfterPermissionCancel?.();
               },
+              (params, signal) => this.#requestPermissionQueued(params, signal),
             );
 
             // Set up sub-agent tool tracking
@@ -7324,6 +7712,9 @@ export class Session implements SessionContext {
             policyToolName,
             toolParams,
           );
+          const permissionFlowCancellation =
+            cancelBeforeExecutionIfAborted(toolName);
+          if (permissionFlowCancellation) return permissionFlowCancellation;
           const {
             finalPermission,
             pmForcedAsk,
@@ -7344,6 +7735,11 @@ export class Session implements SessionContext {
             return earlyErrorResponse(
               new Error(denyMessage ?? `Tool "${toolName}" is denied.`),
               toolName,
+              {
+                status: 'error',
+                errorType: ToolErrorType.EXECUTION_DENIED,
+                executionStatus: 'not_started',
+              },
             );
           }
 
@@ -7375,6 +7771,9 @@ export class Session implements SessionContext {
                 signal: activeToolAbortSignal,
               })
             : ({ classification: 'not-applicable' } as const);
+          const planPolicyCancellation =
+            cancelBeforeExecutionIfAborted(toolName);
+          if (planPolicyCancellation) return planPolicyCancellation;
           if (planShellDecision.classification !== 'not-applicable') {
             const initialPlanShellError = await validatePlanModeShellContext({
               config: this.config,
@@ -7383,10 +7782,20 @@ export class Session implements SessionContext {
               invocationParams: invocation.params as Record<string, unknown>,
               signal: activeToolAbortSignal,
             });
+            const initialPlanValidationCancellation =
+              cancelBeforeExecutionIfAborted(toolName);
+            if (initialPlanValidationCancellation) {
+              return initialPlanValidationCancellation;
+            }
             if (initialPlanShellError) {
               return earlyErrorResponse(
                 new Error(initialPlanShellError),
                 toolName,
+                {
+                  status: 'error',
+                  errorType: ToolErrorType.EXECUTION_DENIED,
+                  executionStatus: 'not_started',
+                },
               );
             }
           }
@@ -7394,6 +7803,11 @@ export class Session implements SessionContext {
             return earlyErrorResponse(
               new Error(planShellDecision.writeBlockMessage),
               toolName,
+              {
+                status: 'error',
+                errorType: ToolErrorType.EXECUTION_DENIED,
+                executionStatus: 'not_started',
+              },
             );
           }
           const planShellRequiresConfirmation =
@@ -7463,6 +7877,9 @@ export class Session implements SessionContext {
                 ? fallback.reason
                 : undefined,
             });
+            const autoModeCancellation =
+              cancelBeforeExecutionIfAborted(toolName);
+            if (autoModeCancellation) return autoModeCancellation;
 
             // Apply decision via shared helper — eliminates ~40 lines of
             // line-for-line duplication with coreToolScheduler.ts and makes
@@ -7483,6 +7900,11 @@ export class Session implements SessionContext {
               callId,
               abortSignal,
             );
+            const permissionDeniedHookCancellation =
+              cancelBeforeExecutionIfAborted(toolName);
+            if (permissionDeniedHookCancellation) {
+              return permissionDeniedHookCancellation;
+            }
             switch (outcome.kind) {
               case 'approved':
                 autoModeAllowed = true;
@@ -7495,6 +7917,11 @@ export class Session implements SessionContext {
                 return earlyErrorResponse(
                   new Error(outcome.errorMessage),
                   toolName,
+                  {
+                    status: 'error',
+                    errorType: ToolErrorType.EXECUTION_DENIED,
+                    executionStatus: 'not_started',
+                  },
                 );
               case 'fallback':
                 // Drop through to the manual-approval flow below.
@@ -7558,6 +7985,11 @@ export class Session implements SessionContext {
             confirmationDetails = await invocation.getConfirmationDetails(
               activeToolAbortSignal,
             );
+            const confirmationDetailsCancellation =
+              cancelBeforeExecutionIfAborted(toolName);
+            if (confirmationDetailsCancellation) {
+              return confirmationDetailsCancellation;
+            }
 
             if (autoModeFallbackMessage) {
               confirmationDetails = decorateClassifierUnavailableConfirmation(
@@ -7578,10 +8010,20 @@ export class Session implements SessionContext {
                   >,
                   signal: activeToolAbortSignal,
                 });
+              const preDisplayValidationCancellation =
+                cancelBeforeExecutionIfAborted(toolName);
+              if (preDisplayValidationCancellation) {
+                return preDisplayValidationCancellation;
+              }
               if (preDisplayPlanShellError) {
                 return earlyErrorResponse(
                   new Error(preDisplayPlanShellError),
                   toolName,
+                  {
+                    status: 'error',
+                    errorType: ToolErrorType.EXECUTION_DENIED,
+                    executionStatus: 'not_started',
+                  },
                 );
               }
             }
@@ -7596,6 +8038,11 @@ export class Session implements SessionContext {
                 return earlyErrorResponse(
                   new Error(planShellDecision.noApprovalMessage),
                   toolName,
+                  {
+                    status: 'error',
+                    errorType: ToolErrorType.EXECUTION_DENIED,
+                    executionStatus: 'not_started',
+                  },
                 );
               }
               throw new Error('Unable to prepare shell confirmation.');
@@ -7620,6 +8067,11 @@ export class Session implements SessionContext {
                     'Please use the exit_plan_mode tool to present your plan and exit plan mode before making changes.',
                 ),
                 toolName,
+                {
+                  status: 'error',
+                  errorType: ToolErrorType.EXECUTION_DENIED,
+                  executionStatus: 'not_started',
+                },
               );
             }
 
@@ -7636,6 +8088,11 @@ export class Session implements SessionContext {
                 undefined,
                 activeToolAbortSignal,
               );
+              const permissionHookCancellation =
+                cancelBeforeExecutionIfAborted(toolName);
+              if (permissionHookCancellation) {
+                return permissionHookCancellation;
+              }
 
               if (
                 hookResult.hasDecision &&
@@ -7658,10 +8115,20 @@ export class Session implements SessionContext {
                         ? { updatedInput: hookResult.updatedInput }
                         : undefined,
                     });
+                    const hookPlanApprovalCancellation =
+                      cancelBeforeExecutionIfAborted(toolName);
+                    if (hookPlanApprovalCancellation) {
+                      return hookPlanApprovalCancellation;
+                    }
                     await confirmationDetails.onConfirm(
                       approval.outcome,
                       approval.payload,
                     );
+                    const hookPlanConfirmationCancellation =
+                      cancelBeforeExecutionIfAborted(toolName);
+                    if (hookPlanConfirmationCancellation) {
+                      return hookPlanConfirmationCancellation;
+                    }
                     if (approval.outcome === ToolConfirmationOutcome.Cancel) {
                       return earlyErrorResponse(
                         new Error(
@@ -7669,6 +8136,11 @@ export class Session implements SessionContext {
                             planShellDecision.noApprovalMessage,
                         ),
                         toolName,
+                        {
+                          status: 'error',
+                          errorType: ToolErrorType.EXECUTION_DENIED,
+                          executionStatus: 'not_started',
+                        },
                       );
                     }
                     recordAutoModeFallbackResolution(approval.outcome);
@@ -7682,6 +8154,11 @@ export class Session implements SessionContext {
                     await confirmationDetails.onConfirm(
                       ToolConfirmationOutcome.ProceedOnce,
                     );
+                    const hookConfirmationCancellation =
+                      cancelBeforeExecutionIfAborted(toolName);
+                    if (hookConfirmationCancellation) {
+                      return hookConfirmationCancellation;
+                    }
                     recordAutoModeFallbackResolution(
                       ToolConfirmationOutcome.ProceedOnce,
                     );
@@ -7693,6 +8170,11 @@ export class Session implements SessionContext {
                         `Permission denied by hook for "${toolName}"`,
                     ),
                     toolName,
+                    {
+                      status: 'error',
+                      errorType: ToolErrorType.EXECUTION_DENIED,
+                      executionStatus: 'not_started',
+                    },
                   );
                 }
               }
@@ -7721,10 +8203,20 @@ export class Session implements SessionContext {
                     >,
                     signal: activeToolAbortSignal,
                   });
+                const finalPlanValidationCancellation =
+                  cancelBeforeExecutionIfAborted(toolName);
+                if (finalPlanValidationCancellation) {
+                  return finalPlanValidationCancellation;
+                }
                 if (finalPreDisplayPlanShellError) {
                   return earlyErrorResponse(
                     new Error(finalPreDisplayPlanShellError),
                     toolName,
+                    {
+                      status: 'error',
+                      errorType: ToolErrorType.EXECUTION_DENIED,
+                      executionStatus: 'not_started',
+                    },
                   );
                 }
               }
@@ -7774,6 +8266,11 @@ export class Session implements SessionContext {
                   _meta: {
                     toolName,
                     ...interactionMetaFields(confirmationDetails),
+                    ...(isExitPlanModeTool && this.activeTodoPlanRevision
+                      ? {
+                          qwenTodoApproval: this.activeTodoPlanRevision,
+                        }
+                      : {}),
                   },
                 },
               };
@@ -7784,7 +8281,12 @@ export class Session implements SessionContext {
                     message ?? `Tool "${toolName}" was canceled by the user.`,
                   ),
                   toolName,
-                  { stopAfterPermissionCancel: true },
+                  {
+                    status: 'cancelled',
+                    errorType: undefined,
+                    executionStatus: 'not_started',
+                    stopAfterPermissionCancel: true,
+                  },
                 );
               };
 
@@ -7793,13 +8295,17 @@ export class Session implements SessionContext {
               };
               let outcome: ToolConfirmationOutcome;
               try {
-                output = (await requestPermissionWithAbort(
-                  this.client,
+                output = (await this.#requestPermissionQueued(
                   params,
                   activeToolAbortSignal,
                 )) as RequestPermissionResponse & {
                   answers?: Record<string, string>;
                 };
+                const permissionRequestCancellation =
+                  cancelBeforeExecutionIfAborted(toolName);
+                if (permissionRequestCancellation) {
+                  return permissionRequestCancellation;
+                }
                 outcome = resolvePermissionOutcome(
                   output,
                   offeredPermissionOptions,
@@ -7819,7 +8325,10 @@ export class Session implements SessionContext {
                     confirmError,
                   );
                 }
-                onStopAfterPermissionCancel?.();
+                const wasAborted = activeToolAbortSignal.aborted;
+                if (!wasAborted) {
+                  onStopAfterPermissionCancel?.();
+                }
                 const permissionFailureMessage = isExitPlanModeTool
                   ? 'The host could not present plan-exit approval. Plan mode remains active; use the host mode selector or /plan exit to leave plan mode.'
                   : planShellDecision.classification === 'unknown'
@@ -7830,9 +8339,20 @@ export class Session implements SessionContext {
                         error,
                       )}`;
                 return earlyErrorResponse(
-                  new Error(permissionFailureMessage),
+                  new Error(
+                    wasAborted
+                      ? 'Tool call was cancelled before execution.'
+                      : permissionFailureMessage,
+                  ),
                   toolName,
-                  { stopAfterPermissionCancel: true },
+                  {
+                    status: wasAborted ? 'cancelled' : 'error',
+                    errorType: wasAborted
+                      ? undefined
+                      : ToolErrorType.UNHANDLED_EXCEPTION,
+                    executionStatus: 'not_started',
+                    stopAfterPermissionCancel: !wasAborted,
+                  },
                 );
               }
 
@@ -7852,6 +8372,11 @@ export class Session implements SessionContext {
                   outcome,
                   payload: confirmationPayload,
                 });
+                const planApprovalCancellation =
+                  cancelBeforeExecutionIfAborted(toolName);
+                if (planApprovalCancellation) {
+                  return planApprovalCancellation;
+                }
                 outcome = approval.outcome;
                 confirmationPayload = approval.payload;
               }
@@ -7868,6 +8393,11 @@ export class Session implements SessionContext {
                   outcome,
                   confirmationPayload,
                 );
+                const confirmationCancellation =
+                  cancelBeforeExecutionIfAborted(toolName);
+                if (confirmationCancellation) {
+                  return confirmationCancellation;
+                }
               } catch (error) {
                 if (outcome !== ToolConfirmationOutcome.Cancel) {
                   throw error;
@@ -7882,6 +8412,9 @@ export class Session implements SessionContext {
               if (shouldSwitchToDefault) {
                 this.config.setApprovalMode(ApprovalMode.DEFAULT);
                 await this.sendCurrentModeUpdateNotification();
+                const modeUpdateCancellation =
+                  cancelBeforeExecutionIfAborted(toolName);
+                if (modeUpdateCancellation) return modeUpdateCancellation;
               }
 
               // Persist permission rules when user explicitly chose "Always Allow".
@@ -7900,6 +8433,11 @@ export class Session implements SessionContext {
                   this.config.getPermissionManager?.(),
                   confirmationPayload,
                 );
+                const permissionPersistenceCancellation =
+                  cancelBeforeExecutionIfAborted(toolName);
+                if (permissionPersistenceCancellation) {
+                  return permissionPersistenceCancellation;
+                }
               }
 
               // After edit tool ProceedAlways, notify the client about mode change
@@ -7908,6 +8446,11 @@ export class Session implements SessionContext {
                 outcome === ToolConfirmationOutcome.ProceedAlways
               ) {
                 await this.sendCurrentModeUpdateNotification();
+                const editModeUpdateCancellation =
+                  cancelBeforeExecutionIfAborted(toolName);
+                if (editModeUpdateCancellation) {
+                  return editModeUpdateCancellation;
+                }
               }
 
               switch (outcome) {
@@ -7916,10 +8459,9 @@ export class Session implements SessionContext {
                     'Switch-to-Default outcome must be normalized before execution.',
                   );
                 case ToolConfirmationOutcome.Cancel:
-                  // Route through earlyErrorResponse so spanError carries the
-                  // cancellation reason (plain errorResponse leaves it unset,
-                  // which makes endToolSpan fall back to the generic 'tool
-                  // error' message) and the declined call is still recorded.
+                  // Route through the terminal helper so the declined call is
+                  // emitted and recorded consistently without marking its span
+                  // as an error.
                   return stopAfterPermissionCancel(
                     confirmationPayload?.cancelMessage,
                   );
@@ -7949,7 +8491,17 @@ export class Session implements SessionContext {
               args,
               status: 'in_progress',
             };
-            await this.toolCallEmitter.emitStart(startParams);
+            try {
+              await this.toolCallEmitter.emitStart(startParams);
+            } catch (emitError) {
+              debugLogger.debug(
+                '[Session.runTool] Failed to emit tool start update',
+                emitError,
+              );
+            }
+            const startEmissionCancellation =
+              cancelBeforeExecutionIfAborted(toolName);
+            if (startEmissionCancellation) return startEmissionCancellation;
           }
 
           // Fire PreToolUse hook (aligned with core path in coreToolScheduler.ts)
@@ -7967,15 +8519,32 @@ export class Session implements SessionContext {
               activeToolAbortSignal,
               callId,
             );
+            const preHookCancellation =
+              cancelBeforeExecutionIfAborted(toolName);
+            if (preHookCancellation) return preHookCancellation;
 
             if (!preHookResult.shouldProceed) {
               // Hook blocked the tool execution - send notification to UI
               const blockReason =
                 preHookResult.blockReason || 'Blocked by PreToolUse hook';
-              await this.messageEmitter.emitAgentMessage(
-                `✗ **PreToolUse blocked**: ${toolName} - ${blockReason}`,
-              );
-              return earlyErrorResponse(new Error(blockReason), toolName);
+              try {
+                await this.messageEmitter.emitAgentMessage(
+                  `✗ **PreToolUse blocked**: ${toolName} - ${blockReason}`,
+                );
+              } catch (emitError) {
+                debugLogger.debug(
+                  '[Session.runTool] Failed to emit PreToolUse block message',
+                  emitError,
+                );
+              }
+              const blockMessageCancellation =
+                cancelBeforeExecutionIfAborted(toolName);
+              if (blockMessageCancellation) return blockMessageCancellation;
+              return earlyErrorResponse(new Error(blockReason), toolName, {
+                status: 'error',
+                errorType: ToolErrorType.EXECUTION_DENIED,
+                executionStatus: 'not_started',
+              });
             }
 
             // Add additional context from PreToolUse hook if provided
@@ -7986,6 +8555,49 @@ export class Session implements SessionContext {
                 `PreToolUse hook additional context for ${toolName}: ${preHookResult.additionalContext}`,
               );
             }
+          }
+
+          const toolInvocationGuard = this.config.getToolInvocationGuard?.();
+          if (toolInvocationGuard) {
+            const invocationContext = getInvocationContext();
+            const guardDecision = await evaluateToolInvocationGuard(
+              toolInvocationGuard,
+              {
+                callId,
+                toolName: policyToolName,
+                args: invocation.params as Record<string, unknown>,
+                signal: activeToolAbortSignal,
+                ...(invocationContext ? { invocationContext } : {}),
+              },
+            );
+            if (activeToolAbortSignal.aborted) {
+              return earlyErrorResponse(
+                new Error('Tool invocation was cancelled'),
+                toolName,
+                {
+                  status: 'cancelled',
+                  errorType: undefined,
+                  executionStatus: 'not_started',
+                },
+              );
+            }
+            if (!guardDecision.allowed) {
+              return earlyErrorResponse(
+                new Error(guardDecision.reason),
+                toolName,
+                {
+                  status: 'error',
+                  errorType: ToolErrorType.EXECUTION_DENIED,
+                  executionStatus: 'not_started',
+                },
+              );
+            }
+          }
+
+          const executionBoundaryCancellation =
+            cancelBeforeExecutionIfAborted(toolName);
+          if (executionBoundaryCancellation) {
+            return executionBoundaryCancellation;
           }
 
           const continuedAgentId =
@@ -8030,9 +8642,9 @@ export class Session implements SessionContext {
             }
           };
 
-          const execSpan = startToolExecutionSpan();
           let toolResult: ToolResult;
           let isExecutionTimeout = false;
+          let parentAbortedAtExecutionSettle = false;
           let aborted = false;
           // Shell liveness heartbeats: forwarded to the client as meta-only
           // tool_call_update frames so a headless gateway can tell a silent
@@ -8071,58 +8683,102 @@ export class Session implements SessionContext {
                   },
                 }
               : undefined;
+          const sleepInhibitorHandle = acquireSleepInhibitor(
+            this.config,
+            `Qwen Code is executing tool ${toolName}`,
+          );
           try {
-            const sleepInhibitorHandle = acquireSleepInhibitor(
-              this.config,
-              `Qwen Code is executing tool ${toolName}`,
-            );
             try {
-              try {
-                addToolArgumentsAttributes(
-                  this.config,
-                  toolSpan,
-                  invocation.params,
-                );
-              } catch {
-                debugLogger.debug(
-                  '[Session.runTool] Failed to record tool arguments telemetry',
-                );
-              }
+              addToolArgumentsAttributes(
+                this.config,
+                toolSpan,
+                invocation.params,
+              );
+            } catch {
+              debugLogger.debug(
+                '[Session.runTool] Failed to record tool arguments telemetry',
+              );
+            }
+
+            const execSpan = startToolExecutionSpan({
+              toolName: policyToolName,
+              callId,
+            });
+            // Set the attempted outcome immediately before calling execute so
+            // synchronous throws are classified as execution failures.
+            executionStatus = 'error';
+            try {
               toolResult = await invocation.execute(
                 activeToolAbortSignal,
                 onToolProgress,
               );
-            } finally {
-              toolSettled = true;
-              sleepInhibitorHandle.release();
+              executeReturned = true;
+              parentAbortedAtExecutionSettle = activeToolAbortSignal.aborted;
+              isExecutionTimeout =
+                toolResult.error?.type === ToolErrorType.EXECUTION_TIMEOUT;
+              aborted = parentAbortedAtExecutionSettle && !isExecutionTimeout;
+              executionStatus = aborted
+                ? 'cancelled'
+                : toolResult.error
+                  ? 'error'
+                  : 'success';
+              executionErrorType = toolResult.error
+                ? (toolResult.error.type ??
+                  (toolType === 'mcp'
+                    ? ToolErrorType.MCP_TOOL_ERROR
+                    : ToolErrorType.UNKNOWN))
+                : undefined;
+              settleRelatedAgent(executionStatus === 'success');
+              endToolExecutionSpan(execSpan, {
+                success: executionStatus === 'success',
+                error: aborted
+                  ? 'tool_cancelled'
+                  : isExecutionTimeout
+                    ? 'tool_timeout'
+                    : toolResult.error
+                      ? 'tool_error'
+                      : undefined,
+                cancelled: aborted,
+                executionStatus,
+                errorType: executionErrorType,
+                ...heartbeatSpanAttributes(),
+              });
+            } catch (execError) {
+              const explicitErrorType = (
+                execError as { errorType?: ToolErrorType } | undefined
+              )?.errorType;
+              const executionTimedOut =
+                explicitErrorType === ToolErrorType.EXECUTION_TIMEOUT;
+              executionStatus =
+                activeToolAbortSignal.aborted && !executionTimedOut
+                  ? 'cancelled'
+                  : 'error';
+              executionErrorType =
+                executionStatus === 'error'
+                  ? (explicitErrorType ??
+                    (toolType === 'mcp'
+                      ? ToolErrorType.MCP_TOOL_ERROR
+                      : ToolErrorType.UNHANDLED_EXCEPTION))
+                  : undefined;
+              settleRelatedAgent(false);
+              endToolExecutionSpan(execSpan, {
+                success: false,
+                error:
+                  executionStatus === 'cancelled'
+                    ? 'tool_cancelled'
+                    : executionTimedOut
+                      ? 'tool_timeout'
+                      : 'tool_exception',
+                cancelled: executionStatus === 'cancelled',
+                executionStatus,
+                errorType: executionErrorType,
+                ...heartbeatSpanAttributes(),
+              });
+              throw execError;
             }
-            isExecutionTimeout =
-              toolResult.error?.type === ToolErrorType.EXECUTION_TIMEOUT;
-            aborted = activeToolAbortSignal.aborted && !isExecutionTimeout;
-            settleRelatedAgent(!toolResult.error && !aborted);
-            endToolExecutionSpan(execSpan, {
-              success: !toolResult.error && !aborted,
-              error: aborted
-                ? 'tool_cancelled'
-                : isExecutionTimeout
-                  ? 'tool_timeout'
-                  : toolResult.error
-                    ? 'tool_error'
-                    : undefined,
-              cancelled: aborted,
-              ...heartbeatSpanAttributes(),
-            });
-          } catch (execError) {
-            settleRelatedAgent(false);
-            endToolExecutionSpan(execSpan, {
-              success: false,
-              error: activeToolAbortSignal.aborted
-                ? 'tool_cancelled'
-                : 'tool_exception',
-              cancelled: activeToolAbortSignal.aborted,
-              ...heartbeatSpanAttributes(),
-            });
-            throw execError;
+          } finally {
+            toolSettled = true;
+            sleepInhibitorHandle.release();
           }
 
           // Clean up event listeners
@@ -8137,23 +8793,31 @@ export class Session implements SessionContext {
           ) {
             await this.sendCurrentModeUpdateNotification();
             if (this.config.getApprovalMode() === ApprovalMode.PLAN) {
+              this.activeTodoPlanRevision = undefined;
               this.#clearTodoStopGuardTrustAndDrainAutomaticQueues();
             }
           }
 
           // Create response parts first (needed for emitResult and recordToolResult)
-          let responseParts = toolResult.error
+          let responseParts = aborted
             ? convertToFunctionErrorResponse(
                 toolName,
                 callId,
-                toolResult.llmContent,
-                toolResult.error.message,
+                TOOL_EXECUTION_CANCELLED_MESSAGE,
+                TOOL_EXECUTION_CANCELLED_MESSAGE,
               )
-            : convertToFunctionResponse(
-                toolName,
-                callId,
-                toolResult.llmContent,
-              );
+            : toolResult.error
+              ? convertToFunctionErrorResponse(
+                  toolName,
+                  callId,
+                  toolResult.llmContent,
+                  toolResult.error.message,
+                )
+              : convertToFunctionResponse(
+                  toolName,
+                  callId,
+                  toolResult.llmContent,
+                );
 
           // A tool can fail "softly" by returning toolResult.error without
           // throwing, and can be cancelled mid-flight. Compute the real outcome
@@ -8162,17 +8826,11 @@ export class Session implements SessionContext {
           // hardcoding success — otherwise failed/cancelled daemon/ACP tools
           // are mislabeled as successful in telemetry, session replay, and the
           // client UI.
-          const status: 'success' | 'error' | 'cancelled' = aborted
+          let status: 'success' | 'error' | 'cancelled' = aborted
             ? 'cancelled'
             : toolResult.error
               ? 'error'
               : 'success';
-          const succeeded = status === 'success';
-          const responseError = toolResult.error
-            ? new Error(toolResult.error.message)
-            : aborted
-              ? new Error('Tool execution was cancelled')
-              : undefined;
 
           if (isTrustedTodoWriteTool && !toolResult.error) {
             this.todoStopGuard.observeTodoWrite(
@@ -8206,6 +8864,18 @@ export class Session implements SessionContext {
               callId,
             );
 
+            if (activeToolAbortSignal.aborted) {
+              return earlyErrorResponse(
+                new Error(TOOL_POST_EXECUTION_CANCELLED_MESSAGE),
+                toolName,
+                {
+                  status: 'cancelled',
+                  errorType: undefined,
+                  executionStatus,
+                },
+              );
+            }
+
             // If hook indicates to stop, return an error response
             if (postHookResult.shouldStop) {
               const stopMessage =
@@ -8215,7 +8885,11 @@ export class Session implements SessionContext {
                 `PostToolUse hook requested stop for ${toolName}: ${stopMessage}`,
               );
               this.todoStopGuard.suspend();
-              return earlyErrorResponse(new Error(stopMessage), toolName);
+              return earlyErrorResponse(new Error(stopMessage), toolName, {
+                status: 'error',
+                errorType: ToolErrorType.EXECUTION_DENIED,
+                executionStatus,
+              });
             }
 
             // Add additional context from PostToolUse hook if provided
@@ -8237,30 +8911,35 @@ export class Session implements SessionContext {
           ) {
             const isInterrupt = aborted;
             // Fire PostToolUseFailure hook when a tool errors or resolves after cancellation.
-            const failureHookResult = await firePostToolUseFailureHook(
-              messageBusForTool,
-              toolUseId,
-              policyToolName,
-              args,
-              toolResult.error?.message ?? 'Tool execution was cancelled',
-              isInterrupt,
-              permissionMode,
-              activeToolAbortSignal,
-              callId,
-            );
-
-            // Log additional context if provided
-            if (failureHookResult.additionalContext) {
+            try {
+              const failureHookResult = await firePostToolUseFailureHook(
+                messageBusForTool,
+                toolUseId,
+                policyToolName,
+                args,
+                toolResult.error?.message ?? TOOL_EXECUTION_CANCELLED_MESSAGE,
+                isInterrupt,
+                permissionMode,
+                activeToolAbortSignal,
+                callId,
+              );
+              if (failureHookResult.additionalContext) {
+                debugLogger.debug(
+                  `PostToolUseFailure hook additional context for ${toolName}: ${failureHookResult.additionalContext}`,
+                );
+              }
+              await this.emitHookArtifactsNotification({
+                hookEventName: 'PostToolUseFailure',
+                toolName,
+                toolCallId: callId,
+                artifacts: failureHookResult.artifacts,
+              });
+            } catch (hookError) {
               debugLogger.debug(
-                `PostToolUseFailure hook additional context for ${toolName}: ${failureHookResult.additionalContext}`,
+                '[Session.runTool] PostToolUseFailure hook failed',
+                hookError,
               );
             }
-            await this.emitHookArtifactsNotification({
-              hookEventName: 'PostToolUseFailure',
-              toolName,
-              toolCallId: callId,
-              artifacts: failureHookResult.artifacts,
-            });
           }
 
           const visionBridgeNotices: string[] = [];
@@ -8276,54 +8955,113 @@ export class Session implements SessionContext {
               ? visionBridgeNotices.join('\n')
               : undefined;
           if (visionBridgeNotice) {
-            await this.messageEmitter.emitAgentMessage(visionBridgeNotice);
+            try {
+              await this.messageEmitter.emitAgentMessage(visionBridgeNotice);
+            } catch (emitError) {
+              debugLogger.debug(
+                '[Session.runTool] Failed to emit vision bridge notice',
+                emitError,
+              );
+            }
+          }
+
+          if (
+            activeToolAbortSignal.aborted &&
+            !(isExecutionTimeout && parentAbortedAtExecutionSettle)
+          ) {
+            status = 'cancelled';
+            responseParts = convertToFunctionErrorResponse(
+              toolName,
+              callId,
+              TOOL_POST_EXECUTION_CANCELLED_MESSAGE,
+              TOOL_POST_EXECUTION_CANCELLED_MESSAGE,
+            );
+          }
+          terminalStatus = status;
+          const succeeded = status === 'success';
+          const responseError =
+            status === 'error' && toolResult.error
+              ? new Error(toolResult.error.message)
+              : status === 'cancelled'
+                ? new Error(TOOL_POST_EXECUTION_CANCELLED_MESSAGE)
+                : undefined;
+          if (isTrustedTodoWriteTool && status === 'cancelled') {
+            this.todoStopGuard.suspend();
           }
 
           // Handle TodoWriteTool: extract todos and send plan update
           if (isTodoWriteTool) {
-            const todos = this.planEmitter.extractTodos(
+            const plan = this.planEmitter.extractPlan(
               toolResult.returnDisplay,
-              args,
+              succeeded ? args : undefined,
             );
 
             // Match original logic: emit plan if todos.length > 0 OR if args had todos
-            if ((todos && todos.length > 0) || Array.isArray(args['todos'])) {
-              await this.planEmitter.emitPlan(todos ?? []);
+            if (
+              plan &&
+              (plan.todos.length > 0 || Array.isArray(args['todos']))
+            ) {
+              try {
+                await this.planEmitter.emitPlan(plan, callId);
+              } catch (emitError) {
+                debugLogger.debug(
+                  '[Session.runTool] Failed to emit plan update',
+                  emitError,
+                );
+              }
             }
 
             // Skip tool_call_update event for TodoWriteTool
             // Still log and return function response for LLM
-          } else {
+          } else if (!isTodoWriteTool) {
             // Normal tool handling: emit result using ToolCallEmitter
-            await this.toolCallEmitter.emitResult({
-              callId,
-              toolName,
-              args,
-              message: responseParts,
-              resultDisplay: toolResult.returnDisplay,
-              error: responseError,
-              success: succeeded,
-              artifacts: toolResult.artifacts,
-            });
+            try {
+              await this.toolCallEmitter.emitResult({
+                callId,
+                toolName,
+                args,
+                message: responseParts,
+                resultDisplay: toolResult.returnDisplay,
+                error: responseError,
+                success: succeeded,
+                artifacts: toolResult.artifacts,
+              });
+            } catch (emitError) {
+              debugLogger.debug(
+                '[Session.runTool] Failed to emit terminal tool update',
+                emitError,
+              );
+            }
           }
 
           const durationMs = Date.now() - startTime;
-          logToolCall(this.config, {
-            'event.name': 'tool_call',
-            'event.timestamp': new Date().toISOString(),
-            function_name: toolName,
-            function_args: args,
-            duration_ms: durationMs,
-            status,
-            success: succeeded,
-            error: toolResult.error?.message,
-            error_type: toolResult.error?.type,
-            prompt_id: promptId,
-            tool_type:
-              typeof tool !== 'undefined' && tool instanceof DiscoveredMCPTool
-                ? 'mcp'
-                : 'native',
-          });
+          try {
+            logToolCall(this.config, {
+              'event.name': 'tool_call',
+              'event.timestamp': new Date().toISOString(),
+              call_id: callId,
+              function_name: toolName,
+              function_args: args,
+              duration_ms: durationMs,
+              status,
+              execution_status: executionStatus,
+              success: succeeded,
+              ...(status === 'error'
+                ? {
+                    error: toolResult.error?.message,
+                    error_type: executionErrorType,
+                  }
+                : {}),
+              prompt_id: promptId,
+              tool_type: toolType,
+              mcp_server_name: mcpServerName,
+            });
+          } catch (telemetryError) {
+            debugLogger.debug(
+              '[Session.runTool] Failed to record terminal tool telemetry',
+              telemetryError,
+            );
+          }
 
           queueToolResultRecord?.(fc, {
             callId,
@@ -8333,18 +9071,19 @@ export class Session implements SessionContext {
             metadata: {
               callId,
               status,
+              executionStatus,
               resultDisplay: toolResult.returnDisplay,
               ...(visionBridgeNotice !== undefined
                 ? { visionBridgeNotice }
                 : {}),
-              error: toolResult.error
-                ? new Error(toolResult.error.message)
-                : undefined,
-              errorType: toolResult.error?.type,
+              error:
+                status === 'error' && toolResult.error
+                  ? new Error(toolResult.error.message)
+                  : undefined,
+              errorType: status === 'error' ? executionErrorType : undefined,
             },
           });
 
-          spanSuccess = succeeded;
           if (succeeded && !nestedPermissionCancelled) {
             const result = responseParts.find(
               (part) => part.functionResponse !== undefined,
@@ -8359,10 +9098,8 @@ export class Session implements SessionContext {
               }
             }
           }
-          if (toolResult.error) {
+          if (status === 'error' && toolResult.error) {
             spanError = toolResult.error.message;
-          } else if (aborted) {
-            spanError = 'Tool execution was cancelled';
           }
           return {
             parts: responseParts,
@@ -8379,80 +9116,95 @@ export class Session implements SessionContext {
                 : undefined,
           };
         } catch (e) {
-          // Ensure cleanup on error
-          cleanupAgentToolResources();
-
           const error = e instanceof Error ? e : new Error(String(e));
-          spanError = error.message;
-
-          // Fire PostToolUseFailure hook (aligned with core path in coreToolScheduler.ts)
           const hooksEnabledForError = !this.config.getDisableAllHooks?.();
           const messageBusForError = this.config.getMessageBus?.();
-          const isInterrupt = activeToolAbortSignal.aborted;
+          const executionTimeoutException =
+            !executeReturned &&
+            executionErrorType === ToolErrorType.EXECUTION_TIMEOUT;
+          let status: 'cancelled' | 'error' =
+            executionStatus === 'cancelled' ||
+            (activeToolAbortSignal.aborted && !executionTimeoutException)
+              ? 'cancelled'
+              : 'error';
+          const isInterrupt = status === 'cancelled';
 
           if (hooksEnabledForError && messageBusForError) {
-            const failureHookResult = await firePostToolUseFailureHook(
-              messageBusForError,
-              toolUseId,
-              policyToolName,
-              args,
-              error.message,
-              isInterrupt,
-              String(approvalMode),
-              activeToolAbortSignal,
-              callId,
-            );
-
-            // Log additional context if provided
-            if (failureHookResult.additionalContext) {
+            try {
+              const failureHookResult = await firePostToolUseFailureHook(
+                messageBusForError,
+                toolUseId,
+                policyToolName,
+                args,
+                error.message,
+                isInterrupt,
+                String(approvalMode),
+                activeToolAbortSignal,
+                callId,
+              );
+              if (failureHookResult.additionalContext) {
+                debugLogger.debug(
+                  `PostToolUseFailure hook additional context for ${toolName}: ${failureHookResult.additionalContext}`,
+                );
+              }
+              await this.emitHookArtifactsNotification({
+                hookEventName: 'PostToolUseFailure',
+                toolName,
+                toolCallId: callId,
+                artifacts: failureHookResult.artifacts,
+              });
+            } catch (hookError) {
               debugLogger.debug(
-                `PostToolUseFailure hook additional context for ${toolName}: ${failureHookResult.additionalContext}`,
+                '[Session.runTool] PostToolUseFailure hook failed',
+                hookError,
               );
             }
-            await this.emitHookArtifactsNotification({
-              hookEventName: 'PostToolUseFailure',
-              toolName,
-              toolCallId: callId,
-              artifacts: failureHookResult.artifacts,
-            });
           }
 
-          // Use ToolCallEmitter for error handling
-          await this.toolCallEmitter.emitError(callId, toolName, error);
+          if (activeToolAbortSignal.aborted && !executionTimeoutException) {
+            status = 'cancelled';
+          }
 
-          const loopDetected =
-            !activeToolAbortSignal.aborted &&
-            !toolBuildSucceeded &&
-            recordDaemonInvalidToolParams(
-              this.config,
-              promptId,
-              toolLoopState,
-              toolName,
-              error,
-            );
-
-          const responseParts = errorResponse(error);
-          queueToolResultRecord?.(fc, {
-            callId,
-            toolName,
-            responseParts,
-            metadata: {
-              callId,
-              status: activeToolAbortSignal.aborted ? 'cancelled' : 'error',
-              resultDisplay: undefined,
-              error,
-              errorType: undefined,
-            },
-          });
-          return {
-            parts: responseParts,
+          const explicitErrorType = (
+            e as { errorType?: ToolErrorType } | undefined
+          )?.errorType;
+          const errorType =
+            status === 'cancelled'
+              ? undefined
+              : (explicitErrorType ??
+                (executeReturned
+                  ? ToolErrorType.UNHANDLED_EXCEPTION
+                  : (executionErrorType ??
+                    (!toolBuildSucceeded
+                      ? ToolErrorType.INVALID_TOOL_PARAMS
+                      : ToolErrorType.UNHANDLED_EXCEPTION))));
+          return earlyErrorResponse(error, toolName, {
+            status,
+            errorType,
+            executionStatus,
+            recordInvalidToolParams: !toolBuildSucceeded,
             stopAfterPermissionCancel: nestedPermissionCancelled,
-            loopDetected,
-          };
+          });
         }
       }); // end runInToolSpanContext
+    } catch (e) {
+      const error = e instanceof Error ? e : new Error(String(e));
+      const status = activeToolAbortSignal.aborted ? 'cancelled' : 'error';
+      return await earlyErrorResponse(error, toolName, {
+        status,
+        errorType:
+          status === 'error' ? ToolErrorType.UNHANDLED_EXCEPTION : undefined,
+        executionStatus,
+      });
     } finally {
-      endToolSpan(toolSpan, { success: spanSuccess, error: spanError });
+      if (terminalStatus === 'cancelled') {
+        endToolSpan(toolSpan, { success: false, cancelled: true });
+      } else {
+        endToolSpan(toolSpan, {
+          success: terminalStatus === 'success',
+          error: spanError,
+        });
+      }
     }
   }
 
@@ -8587,6 +9339,11 @@ export class Session implements SessionContext {
         throw new Error(unsupportedError);
       }
 
+      case 'goal_control':
+        throw new Error(
+          'Canonical Goal control is not available in ACP integration yet.',
+        );
+
       case 'no_command':
         // No command was found or executed, resolve the original prompt
         // through the standard path that handles all block types. promptLast
@@ -8623,7 +9380,7 @@ export class Session implements SessionContext {
     const embeddedContext: EmbeddedResourceResource[] = [];
     const extensionMentions = new Map<string, string>();
     const mcpServerMentions = new Map<string, string>();
-    const textPathSpecsToRead = new Set<string>();
+    const textPathSpecsToRead = new Map<string, string>();
     const preserveUnsupportedImageForBridge = shouldRunVisionBridge(
       this.config,
     );
@@ -8634,23 +9391,27 @@ export class Session implements SessionContext {
           collectExtensionMentionRefs(part.text, extensionMentions);
           collectMcpServerMentionRefs(part.text, mcpServerMentions);
           for (const pathSpec of extractAtPathCommands(part.text)) {
+            if (!path.isAbsolute(pathSpec)) continue;
             const resolved = path.resolve(
               this.config.getProjectRoot(),
               pathSpec,
             );
+            const canonicalPath = resolveExistingFile(resolved);
+            if (!canonicalPath) continue;
             const filteringOptions = this.config.getFileFilteringOptions();
             if (
-              path.isAbsolute(pathSpec) &&
-              getSpecificMimeType(resolved)?.startsWith('image/') &&
-              isExistingFile(resolved) &&
+              getSpecificMimeType(canonicalPath)?.startsWith('image/') &&
               this.config
                 .getWorkspaceContext()
-                .isPathWithinWorkspace(pathSpec) &&
+                .isPathWithinWorkspace(canonicalPath) &&
               !this.config
                 .getFileService()
-                .shouldIgnoreFile(pathSpec, filteringOptions)
+                .shouldIgnoreFile(pathSpec, filteringOptions) &&
+              !this.config
+                .getFileService()
+                .shouldIgnoreFile(canonicalPath, filteringOptions)
             ) {
-              textPathSpecsToRead.add(pathSpec);
+              textPathSpecsToRead.set(canonicalPath, pathSpec);
             }
           }
           return { text: part.text };
@@ -8701,18 +9462,65 @@ export class Session implements SessionContext {
     });
 
     const atPathCommandParts = parts.filter((part) => 'fileData' in part);
-    const pathSpecsToRead = [
-      ...new Set([
-        ...textPathSpecsToRead,
-        ...atPathCommandParts.map((part) => part.fileData!.fileUri!),
-      ]),
-    ];
     const extensionParts = await this.#resolveExtensionMentionParts(
       extensionMentions,
       abortSignal,
     );
     const mcpServerParts =
       this.#resolveMcpServerMentionParts(mcpServerMentions);
+    const revalidatedTextPaths: string[] = [];
+    const validatedPathIdentities = new Map<
+      string,
+      { dev: number; ino: number }
+    >();
+    const candidatePathsToRead = [
+      ...textPathSpecsToRead.entries(),
+      ...atPathCommandParts.flatMap((part) => {
+        const fileUri = part.fileData!.fileUri!;
+        const resolved = path.resolve(this.config.getTargetDir(), fileUri);
+        const canonicalPath = resolveExistingFile(resolved);
+        return canonicalPath ? [[canonicalPath, fileUri] as const] : [];
+      }),
+    ];
+    const filteringOptions =
+      candidatePathsToRead.length > 0
+        ? this.config.getFileFilteringOptions()
+        : undefined;
+    const displayPaths = new Map<string, string>();
+    const acceptedFileUris = new Set<string>();
+    for (const [textPath, displayPath] of candidatePathsToRead) {
+      try {
+        if (
+          resolveExistingFile(textPath) !== textPath ||
+          !this.config.getWorkspaceContext().isPathWithinWorkspace(textPath) ||
+          (textPathSpecsToRead.has(textPath) &&
+            !getSpecificMimeType(textPath)?.startsWith('image/')) ||
+          this.config
+            .getFileService()
+            .shouldIgnoreFile(displayPath, filteringOptions) ||
+          this.config
+            .getFileService()
+            .shouldIgnoreFile(textPath, filteringOptions)
+        ) {
+          continue;
+        }
+        const stats = statSync(textPath);
+        revalidatedTextPaths.push(textPath);
+        displayPaths.set(textPath, displayPath);
+        acceptedFileUris.add(displayPath);
+        validatedPathIdentities.set(textPath, {
+          dev: stats.dev,
+          ino: stats.ino,
+        });
+      } catch {
+        // The path changed between validation steps; skip it fail-closed.
+      }
+    }
+    const pathSpecsToRead = [...new Set(revalidatedTextPaths)];
+    const partsToSend = parts.filter(
+      (part) =>
+        !('fileData' in part) || acceptedFileUris.has(part.fileData!.fileUri!),
+    );
 
     if (
       pathSpecsToRead.length === 0 &&
@@ -8721,7 +9529,7 @@ export class Session implements SessionContext {
       mcpServerParts.length === 0
     ) {
       return this.#applyBridgeConversionsIfNeeded(
-        parts,
+        partsToSend,
         abortSignal,
         options.onFullTurnModel,
       );
@@ -8729,7 +9537,7 @@ export class Session implements SessionContext {
 
     if (pathSpecsToRead.length === 0 && embeddedContext.length === 0) {
       return this.#applyBridgeConversionsIfNeeded(
-        [...parts, ...extensionParts, ...mcpServerParts],
+        [...partsToSend, ...extensionParts, ...mcpServerParts],
         abortSignal,
         options.onFullTurnModel,
       );
@@ -8737,8 +9545,8 @@ export class Session implements SessionContext {
 
     // Construct the initial part of the query for the LLM
     let initialQueryText = '';
-    for (let i = 0; i < parts.length; i++) {
-      const chunk = parts[i];
+    for (let i = 0; i < partsToSend.length; i++) {
+      const chunk = partsToSend[i];
       if ('text' in chunk) {
         initialQueryText += chunk.text;
       } else if ('fileData' in chunk) {
@@ -8776,6 +9584,10 @@ export class Session implements SessionContext {
         ...(preserveUnsupportedImageForBridge
           ? { preserveUnsupportedImageForBridge }
           : {}),
+        ...(validatedPathIdentities.size > 0
+          ? { validatedPathIdentities }
+          : {}),
+        ...(displayPaths.size > 0 ? { displayPaths } : {}),
       });
 
       const contentParts = Array.isArray(readResult.contentParts)

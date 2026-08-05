@@ -45,3 +45,6 @@ export {
   SkillActivationRegistry,
   splitConditionalSkills,
 } from './skill-activation.js';
+
+// Project auto-skill lifecycle maintenance
+export * from './skill-curator.js';

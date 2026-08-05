@@ -8,10 +8,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DaemonSessionProvider,
   useConnection,
+  type DaemonSessionActions,
   type DaemonWorkspaceActions,
 } from '@qwen-code/webui/daemon-react-sdk';
 import type {
   DaemonSessionArtifact,
+  DaemonSessionMonitorTaskStatus,
   DaemonWorkspaceCapability,
 } from '@qwen-code/sdk/daemon';
 import type { WebShellSlashCommandHandler } from '../App';
@@ -57,6 +59,11 @@ export interface SplitViewProps {
   onError?: (error: unknown, fallback: string) => void;
   onSlashCommand?: WebShellSlashCommandHandler;
   onRightPanelOpen?: (request: TurnOutputOpenRequest) => void;
+  onOpenMonitor?: (
+    task: DaemonSessionMonitorTaskStatus,
+    sessionId: string,
+    sessionActions: DaemonSessionActions,
+  ) => void;
   onPaneArtifactsChange?: (
     sessionId: string,
     artifacts: readonly DaemonSessionArtifact[],
@@ -84,6 +91,7 @@ export interface SplitViewProps {
   voiceUserRevision?: number;
   voiceWorkspaceRevisions?: Readonly<Record<string, number>>;
   voiceWorkspaces?: readonly DaemonWorkspaceCapability[];
+  sessionWorkflowEnabled?: boolean;
 }
 
 /**
@@ -100,6 +108,7 @@ export function SplitView({
   onError,
   onSlashCommand,
   onRightPanelOpen,
+  onOpenMonitor,
   onPaneArtifactsChange,
   messageTurnOutputs,
   renderPaneHeaderActions,
@@ -111,6 +120,7 @@ export function SplitView({
   voiceUserRevision = 0,
   voiceWorkspaceRevisions = {},
   voiceWorkspaces,
+  sessionWorkflowEnabled = false,
 }: SplitViewProps) {
   const { t } = useI18n();
   const connection = useConnection();
@@ -520,9 +530,11 @@ export function SplitView({
                       onError={onError}
                       onSlashCommand={onSlashCommand}
                       onRightPanelOpen={onRightPanelOpen}
+                      onOpenMonitor={onOpenMonitor}
                       onPaneArtifactsChange={onPaneArtifactsChange}
                       messageTurnOutputs={messageTurnOutputs}
                       restartSseOnPrompt={restartSseOnPrompt}
+                      sessionWorkflowEnabled={sessionWorkflowEnabled}
                     />
                   </DaemonSessionProvider>
                 </ErrorBoundary>

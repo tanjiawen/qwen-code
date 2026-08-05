@@ -21,11 +21,13 @@ import {
   handleUncaughtException,
   isExpectedPtyRaceError,
 } from './utils/uncaught-exception-handler.js';
+import { initPerformanceBufferJanitor } from './utils/performance-buffer-janitor.js';
 
 // Preserve the old entrypoint's profiling baseline before route-specific
 // dynamic imports or command handling shift startup measurements.
 initStartupProfiler();
 initCpuProfiler();
+initPerformanceBufferJanitor();
 
 type BootstrapRoute = 'serve' | 'mcp' | 'help' | 'version' | 'default';
 

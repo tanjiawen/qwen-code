@@ -5,6 +5,43 @@
 
 ---
 
+## v0.21.2-study.12 (2026-08-03)
+
+**主题：修复 dev 模式长会话反复崩溃（OOM）**
+
+### 背景
+
+`npm run dev` 模式的长会话运行约 36–42 分钟必崩，一天内崩了两次。系统崩溃
+报告显示是 V8 JavaScript 堆耗尽后进程主动 abort。
+
+根因：渲染库 react-reconciler 的 dev 构建在**每次 UI 渲染**时都调用
+`performance.measure()`，而 Node 把这些记录全部存在全局缓冲区、永不自动清理。
+打包产物已有上游修复（构建时强制 production 模式，tree-shake 掉 dev 构建），
+但 dev 模式按设计运行在 development 模式，修复不生效。实测高渲染负载下约
+每秒累积 900 条（每条约 1KB），40 分钟可达 200 万条（约 2GB）撞上堆上限。
+（study.x 新增的 dashboard hook 日志模块上限 50 条，已排查排除。）
+
+### 变更内容
+
+#### 1. 定期清理 performance 缓冲区（新模块）
+
+- **新增** `packages/cli/src/utils/performance-buffer-janitor.ts`：每 60 秒
+  清空一次累积的 mark/measure 记录，把无界增长变成有界锯齿（峰值约 50MB）。
+  `unref` 不阻塞进程正常退出，重复初始化安全（幂等）。
+- 清理安全性已确认：全仓检索 Node 侧没有任何代码读取这些记录
+  （启动耗时测量只用 `performance.now()` 时钟，不读条目）。
+- 接入点：`packages/cli/src/cli.ts` 顶部，与现有的 startupProfiler /
+  cpuProfiler 初始化并排，覆盖所有子命令路由。
+
+#### 2. 测试与验证
+
+- **新增** `performance-buffer-janitor.test.ts` 4 个单测：定时清理、首个周期
+  前不误清、幂等、reset 语义。
+- 端到端复验：真实模块 + dev 构建渲染循环运行 65 秒，记录数在 60 秒清理点
+  从 41,095 回落到 12，确认增长有界。typecheck / lint / build 全绿。
+
+---
+
 ## v0.21.2-study.11 (2026-08-03)
 
 **主题：修完审计剩下的两个问题（模块说明书 + 技能瘦身）**

@@ -17,7 +17,7 @@
  * `git commit --no-verify` (same as the lint gate).
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -26,6 +26,24 @@ const REPO = process.cwd();
 const CONFIG_PATH = path.join(REPO, '.better-harness', 'blast-radius.json');
 const BH = process.env.BETTER_HARNESS_DIR || path.join(os.homedir(), 'better-harness');
 const BLAST = path.join(BH, 'hooks/git-scripts/blast-radius.mjs');
+
+/** 追加一条 gate 触发记录到 .qwen/harness-status.jsonl（fail-open）。 */
+function recordStatus(result, detail) {
+  try {
+    const dir = path.join(REPO, '.qwen');
+    mkdirSync(dir, { recursive: true });
+    const line = JSON.stringify({
+      ts: Date.now(),
+      type: 'gate',
+      source: 'pre-commit',
+      result,
+      detail,
+    });
+    appendFileSync(path.join(dir, 'harness-status.jsonl'), line + '\n');
+  } catch {
+    // fail-open：记录失败不影响门禁本身。
+  }
+}
 
 function readConfig() {
   try {
@@ -184,6 +202,7 @@ if (blockers.length > 0) {
   console.error(formatReviewMessage(report));
   console.error('\n如确属误报：调整 .better-harness/blast-radius.json 阈值，或 git commit --no-verify 绕过。');
   console.error('里程碑/PR 前请运行完整审计：/better-harness\n');
+  recordStatus('block', `影响半径阻止提交（${blockers.length} 项）`);
   process.exit(1);
 }
 
@@ -191,6 +210,9 @@ if (report.severity === 'high') {
   console.warn(
     `[better-harness] 警告：影响半径 severity=high（score ${report.score}），建议运行 /better-harness 审计。`,
   );
+  recordStatus('warn', `影响半径 severity=high（score ${report.score}）`);
+} else {
+  recordStatus('pass', `影响半径分析通过（score ${report.score}）`);
 }
 
 process.exit(0);

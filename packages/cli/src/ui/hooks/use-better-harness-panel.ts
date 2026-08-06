@@ -11,6 +11,10 @@ import {
   buildBetterHarnessPanel,
   type BetterHarnessPanel,
 } from '../utils/progress-insights.js';
+import {
+  buildHarnessStatus,
+  type HarnessStatus,
+} from '../utils/harness-status.js';
 
 /**
  * 审计结果是低频数据（一次里程碑审计才更新一次），无需占用 ProgressPanel
@@ -120,4 +124,49 @@ export function useBetterHarnessPanel(
   }, [cwd]);
 
   return panel;
+}
+
+const STATUS_FILE = path.join('.qwen', 'harness-status.jsonl');
+
+/**
+ * 读取 `.qwen/harness-status.jsonl`（gate 触发 / skill 调用记录）并解析为面板
+ * 数据。无记录或解析失败返回 undefined（由组件显示占位）。5s 轮询。
+ */
+export function useHarnessStatus(cwd: string): HarnessStatus | undefined {
+  const [status, setStatus] = useState<HarnessStatus | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    let refreshGeneration = 0;
+
+    const refresh = async () => {
+      const generation = ++refreshGeneration;
+      let next: HarnessStatus | undefined;
+      try {
+        const text = await readFile(path.join(cwd, STATUS_FILE), 'utf8');
+        const parsed = buildHarnessStatus(text);
+        next =
+          parsed.gates.length > 0 || parsed.skills.length > 0
+            ? parsed
+            : undefined;
+      } catch {
+        next = undefined;
+      }
+      if (cancelled || generation !== refreshGeneration) return;
+      setStatus(next);
+    };
+
+    void refresh().catch(() => {});
+    const pollTimer = setInterval(() => {
+      void refresh().catch(() => {});
+    }, BETTER_HARNESS_POLL_INTERVAL_MS);
+    pollTimer.unref?.();
+
+    return () => {
+      cancelled = true;
+      clearInterval(pollTimer);
+    };
+  }, [cwd]);
+
+  return status;
 }

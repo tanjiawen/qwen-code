@@ -29,7 +29,10 @@ import {
   type LifecyclePhase,
   type BetterHarnessSeverity,
 } from '../utils/progress-insights.js';
-import { useBetterHarnessPanel } from '../hooks/use-better-harness-panel.js';
+import {
+  useBetterHarnessPanel,
+  useHarnessStatus,
+} from '../hooks/use-better-harness-panel.js';
 
 const POLL_INTERVAL_MS = 1000;
 const BAR_WIDTH = 14;
@@ -268,6 +271,7 @@ export const ProgressPanel: React.FC = () => {
 
   // Better Harness 第三列：最近一次审计的五维分数 + findings 概览。
   const betterHarnessPanel = useBetterHarnessPanel(process.cwd());
+  const harnessStatus = useHarnessStatus(process.cwd());
 
   // 思考链 / 记忆 / 图谱：仅在历史增长时重算。
   const historyLen = history.length;
@@ -599,6 +603,23 @@ export const ProgressPanel: React.FC = () => {
               minute: '2-digit',
             })}`
           : '—'}
+      </Text>
+    </>
+  ) : harnessStatus ? (
+    <>
+      <Text dimColor>
+        {harnessStatus.gates[0]
+          ? `Gate ${harnessStatus.gates[0].result} · ${
+              harnessStatus.gates[0].detail?.slice(0, 16) ?? ''
+            }`
+          : '无 Gate 记录'}
+      </Text>
+      <Text dimColor>
+        {harnessStatus.skills[0]
+          ? `Skill ${harnessStatus.skills[0].name} · ${
+              harnessStatus.skills[0].status ?? 'invoked'
+            }`
+          : '无 Skill 记录'}
       </Text>
     </>
   ) : (

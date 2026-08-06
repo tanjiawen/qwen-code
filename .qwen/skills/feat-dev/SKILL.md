@@ -18,9 +18,13 @@ blueprint:
       requires: 'Glossary terms confirmed'
     - description: 'Write design doc in docs/design/'
       requires: 'Investigation complete'
+    - description: 'Design deep modules: a small interface hiding real work; refactor shallow fragments into it (deep-module)'
+      requires: 'Design doc on disk'
+    - description: 'Design interfaces and delegate: define module boundaries and interfaces, have the model fill internals, and test at the interface (design-interface)'
+      requires: 'Deep-module design agreed'
     - description: 'Write a failing test that captures the desired behavior (tdd-first, red)'
       tool: 'write_file'
-      requires: 'Design doc on disk'
+      requires: 'Interface design agreed'
     - description: 'Write E2E test plan in .qwen/e2e-tests/'
       requires: 'Failing test written'
     - description: 'Dry-run test plan against baseline'
@@ -69,6 +73,16 @@ constraints:
     ordering:
       before: 'Write the failing test'
       after: 'Implement changes per design doc'
+  - type: ordering
+    description: 'Design deep modules before writing the failing test; the test targets the deep interface (deep-module)'
+    ordering:
+      before: 'Design deep modules'
+      after: 'Write a failing test'
+  - type: ordering
+    description: 'Define interface boundaries and delegate implementation before coding (design-interface)'
+    ordering:
+      before: 'Design interfaces and delegate'
+      after: 'Implement changes per design doc'
   - type: mandatory
     description: 'Before design or implementation, read GLOSSARY.md if it exists and use its canonical terms'
     mandatory:
@@ -95,10 +109,12 @@ This workflow enforces the engineering-practices baseline (see
 - **Shared vocabulary** (`domain-glossary`): read `GLOSSARY.md` if it exists and
   use canonical terms.
 - **Deep modules** (`deep-module`): prefer a small interface hiding real work
-  over a sea of shallow fragments.
-- **Interface delegation** (Matt Pocock's 5th technique): you design module
-  boundaries and interfaces; the model fills interface internals; you write
-  tests at the interface to verify the model's output.
+  over a sea of shallow fragments. **Enforced as a blueprint step before the
+  failing test.**
+- **Interface delegation** (`design-interface`, Matt Pocock's 5th technique):
+  you design module boundaries and interfaces; the model fills interface
+  internals; you write tests at the interface to verify the model's output.
+  **Enforced as a blueprint step before implementation.**
 
 ## Artifact Paths
 

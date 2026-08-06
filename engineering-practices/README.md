@@ -37,6 +37,7 @@ Constraint = traffic rules (advisory, follow or not)**.
 | `domain-glossary`     | Maintain a Ubiquitous Language in `GLOSSARY.md`            | Evans, _Domain-Driven Design_                 |
 | `tdd-first`           | Test-first red-green-refactor in small steps               | Beck, _Test-Driven Development_               |
 | `deep-module`         | Small interface hiding real work; refactor shallow modules | Ousterhout, _A Philosophy of Software Design_ |
+| `design-interface`    | Design interfaces, delegate internals, test at the seam    | Matt Pocock's 5th technique                   |
 | `feat-dev` (enhanced) | Feature workflow + enforced practices                      | Matt's interface-delegation technique         |
 | `bugfix` (enhanced)   | Reproduce-first + failing-test-before-fix                  | Pragmatic Programmer                          |
 

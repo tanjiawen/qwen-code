@@ -21,9 +21,11 @@ Required (advisory constraints, follow unless you can justify otherwise):
 - **Shared vocabulary** (`domain-glossary`): read `GLOSSARY.md` if present and
   use its canonical terms.
 - **Deep modules** (`deep-module`): prefer a small interface hiding real work
-  over a sea of shallow fragments.
-- **Interface delegation**: you design module boundaries and interfaces; the
-  model fills interface internals; you write tests at the interface to verify
-  the model's output.
+  over a sea of shallow fragments. Enforced in feat-dev before the failing test.
+- **Interface delegation** (`design-interface`): you design module boundaries
+  and interfaces; the model fills interface internals; you write tests at the
+  interface to verify the model's output. Enforced in feat-dev before
+  implementation.
 
-The skills are: `grill-me`, `domain-glossary`, `tdd-first`, `deep-module`.
+The skills are: `grill-me`, `domain-glossary`, `tdd-first`, `deep-module`,
+`design-interface`.

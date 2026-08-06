@@ -54,6 +54,10 @@ vi.mock('./components/agent-view/AgentTabBar.js', () => ({
   AgentTabBar: () => null,
 }));
 
+vi.mock('./components/ProgressPanel.js', () => ({
+  ProgressPanel: () => null,
+}));
+
 describe('App', () => {
   const mockUIState: Partial<UIState> = {
     streamingState: StreamingState.Idle,

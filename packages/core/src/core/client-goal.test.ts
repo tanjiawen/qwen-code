@@ -233,6 +233,9 @@ function setupGoalClient() {
       makeSnapshot: vi.fn(async () => undefined),
       getSnapshots: vi.fn(() => []),
     })),
+    getFileReadCache: vi.fn(() => ({
+      getStalePaths: vi.fn(async () => []),
+    })),
   } as unknown as Config;
   const client = new GeminiClient(config);
   client['chat'] = {

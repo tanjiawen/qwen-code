@@ -145,6 +145,7 @@ describe('StatusLineDialog', () => {
         'git-branch',
         'model-with-reasoning',
         'context-used',
+        'qwen-version',
       ],
     });
     expect(
@@ -203,6 +204,7 @@ describe('StatusLineDialog', () => {
         'git-branch',
         'model-with-reasoning',
         'context-used',
+        'qwen-version',
       ],
     });
   });

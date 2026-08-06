@@ -5,6 +5,55 @@
 
 ---
 
+## v0.21.5-study.2 (2026-08-06)
+
+**主题：激活 ProgressPanel 的 Better Harness 状态面板（feat-dev 流程试跑）**
+
+### 背景
+
+用 `/feat-dev` 完整走了一遍强化后的 blueprint（grill → 术语表 → 失败测试 TDD →
+设计 → 实现 → 验证），证明新的强制步骤真实执行。feature 本体是激活 ProgressPanel
+第三列 Better Harness 显示组——它之前只读五维审计产物（fail：平时无审计产物，
+恒显示「未审计」占位），形同摆设。
+
+### 变更内容
+
+#### 1. 运行时状态记录器（新增解析模块）
+
+- **新增** `packages/cli/src/ui/utils/harness-status.ts`：纯函数
+  `buildHarnessStatus(jsonl, limit)` 解析 `.qwen/harness-status.jsonl`（gate 触发 /
+  skill 调用记录），按 ts 降序、按类型分 gate/skill、损坏行跳过（fail-open）。
+- **新增** `packages/cli/src/ui/utils/harness-status.test.ts`：6 个单测（TDD 红→绿）。
+
+#### 2. gate 写状态记录
+
+- `scripts/better-harness-gate.mjs`：在 pass/warn/block 退出点追加一行 gate 记录到
+  `.qwen/harness-status.jsonl`（结果 + 影响半径 detail），fail-open 不影响门禁。
+
+#### 3. 面板读取与显示
+
+- **新增** `useHarnessStatus` hook（`use-better-harness-panel.ts`）：5s 轮询读取状态文件。
+- `ProgressPanel.tsx`：无审计产物时，若存在 gate/skill 状态则显示最近记录（如
+  `Gate pass · 影响半径分析通过`、`Skill grill-me · invoked`），不再恒为「未审计」。
+
+#### 4. 工程实践落地（沿用工程实践模板包）
+
+- **新增** `GLOSSARY.md`（统一语言术语表，12 个核心术语）。
+- **新增** `docs/design/better-harness-status-panel.md`（设计文档）。
+
+### 验证
+
+- typecheck 通过；`harness-status.test.ts` 6/6 通过；lint 通过。
+- 端到端：写 gate+skill 记录 → `buildHarnessStatus` 正确解析（gates=[pass]，skills=[grill-me]）。
+- `.qwen/harness-status.jsonl` 为 git-ignored，不提交。
+
+### 备注
+
+- `~/.qwen/scripts/better-harness-stop-gate.sh` 尚未加写记录（涉及全局配置，待用户确认）。
+- skill 调用记录目前依赖状态文件被写入；完整 skill hook 记录机制为后续。
+
+---
+
 ## v0.21.2-study.12 (2026-08-03)
 
 **主题：修复 dev 模式长会话反复崩溃（OOM）**

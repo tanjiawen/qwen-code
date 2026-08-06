@@ -1,6 +1,6 @@
 {
   "name": "@qwen-code/qwen-code",
-  "version": "0.21.5-study.1",
+  "version": "0.21.5-study.2",
   "engines": {
     "node": ">=22.0.0"
   },

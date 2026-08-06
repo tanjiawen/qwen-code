@@ -44,6 +44,16 @@ constraints:
     ordering:
       before: 'Verify the fix via test-engineer agent'
       after: 'Self-audit and code review'
+  - type: ordering
+    description: 'A failing test that reproduces the bug must exist before the fix (tdd-first)'
+    ordering:
+      before: 'Write the failing reproduction test'
+      after: 'Fix the bug based on reproduction report'
+  - type: mandatory
+    description: 'Before fixing, read GLOSSARY.md if it exists and use canonical terms'
+    mandatory:
+      tool: 'read_file'
+      condition: 'GLOSSARY.md exists at the project root'
 ---
 
 # Bugfix Workflow

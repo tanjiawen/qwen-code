@@ -50,6 +50,21 @@ constraints:
     ordering:
       before: 'Verify with full E2E test plan'
       after: 'Self-audit and code review'
+  - type: ordering
+    description: 'Reach a shared design concept (grill-me) before implementation; do not start coding on a vague idea'
+    ordering:
+      before: 'Write design doc in docs/design/'
+      after: 'Implement changes per design doc'
+  - type: ordering
+    description: 'A failing test that captures the desired behavior must exist before implementation (tdd-first)'
+    ordering:
+      before: 'Write the failing test'
+      after: 'Implement changes per design doc'
+  - type: mandatory
+    description: 'Before design or implementation, read GLOSSARY.md if it exists and use its canonical terms'
+    mandatory:
+      tool: 'read_file'
+      condition: 'GLOSSARY.md exists at the project root'
 ---
 
 # Feature Development Workflow
@@ -58,6 +73,23 @@ Use this workflow when implementing a feature in qwen-code that needs design,
 behavioral validation, or coordinated changes across multiple files. Each phase
 produces a concrete artifact. Do not combine phases; the output of each phase
 feeds the next.
+
+## Enforced Engineering Practices
+
+This workflow enforces the engineering-practices baseline (see
+`engineering-practices/README.md`). The enforced constraints are:
+
+- **Align before building** (`grill-me`): reach a shared design concept before
+  implementation. Do not start coding on a vague idea.
+- **Test first** (`tdd-first`): a failing test capturing the desired behavior
+  must exist before implementation.
+- **Shared vocabulary** (`domain-glossary`): read `GLOSSARY.md` if it exists and
+  use canonical terms.
+- **Deep modules** (`deep-module`): prefer a small interface hiding real work
+  over a sea of shallow fragments.
+- **Interface delegation** (Matt Pocock's 5th technique): you design module
+  boundaries and interfaces; the model fills interface internals; you write
+  tests at the interface to verify the model's output.
 
 ## Artifact Paths
 

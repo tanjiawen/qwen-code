@@ -76,22 +76,24 @@ from the global CSS/portal-root. React 18+19 → ref-sensitive wrappers use
 
 ## Development Guidelines
 
+### Engineering practices
+
+Layered practices enforced (see `engineering-practices/README.md`): mechanical
+(compiles, tests, interface-grep) + required (`grill-me`, `tdd-first`,
+`domain-glossary`, `deep-module`, interface delegation).
+
 ### General workflow
 
 1. **Design doc for non-trivial work** — in `docs/design/` when the change spans multiple files or design decisions; skip bugfixes.
 2. **Test plan for behavioral changes** — an E2E test plan in `.qwen/e2e-tests/`; dry-run against the global `qwen` CLI first.
-3. **Build, typecheck, and test before declaring done**: `npm run build &&
-npm run typecheck`, plus unit tests for changed files.
-4. **Self-audit before done** — read the full diff in open-ended passes,
-   presuming each green test wrong; two clean passes suffice. Fix re-runs
-   step 3; five passes without convergence → say so.
-5. **Code review** — run `/review` when available (the Codex workflow, not
-   Qwen Review); triage each comment, send fixes back through steps 3-4.
-6. **Better Harness gate (mandatory)** — every change is gated by the Stop
-   hook (`~/.qwen/scripts/better-harness-stop-gate.sh`) and the pre-commit
-   hook (`scripts/better-harness-gate.mjs`); maintainer exemption downgrades
-   core/security blocks to warnings. Run `/better-harness` at each milestone;
-   thresholds live in `.better-harness/blast-radius.json`.
+3. **Build, typecheck, test before done**: `npm run build && npm run typecheck`, plus unit tests for changed files.
+4. **Self-audit before done** — read the full diff, presuming each green test
+   wrong; two clean passes suffice. Fix re-runs step 3; five passes → say so.
+5. **Code review** — run `/review` (the Codex workflow, not Qwen Review); triage comments, fixes back through steps 3-4.
+6. **Better Harness gate (mandatory)** — every change gated by the Stop hook
+   (`~/.qwen/scripts/better-harness-stop-gate.sh`) and pre-commit hook
+   (`scripts/better-harness-gate.mjs`); maintainer exemption downgrades core
+   blocks. Run `/better-harness` at milestones; thresholds in blast-radius.json.
 
 ### Feature development
 

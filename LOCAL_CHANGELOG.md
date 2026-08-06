@@ -5,6 +5,42 @@
 
 ---
 
+## v0.21.5-study.3 (2026-08-06)
+
+**主题：Better Harness 状态列提取为可测组件 + 渲染效果验证**
+
+### 背景
+
+激活状态面板后，渲染整个 ProgressPanel 验证效果需要 mock 大量依赖
+（core 的 selectLiveSnapshot 服务、ConfigContext 等），成本高且不稳定。
+为便于单独渲染验证，把「无审计但有 gate/skill 状态」的显示逻辑提取为独立
+组件（deep-module：可测核心模块化）。
+
+### 变更内容
+
+- **新增** `packages/cli/src/ui/components/HarnessStatusBody.tsx`：接收
+  `HarnessStatus`，渲染 gate + skill 最近状态摘要（`Gate pass · ...` /
+  `Skill grill-me · invoked`）。
+- **改** `ProgressPanel.tsx`：无审计且 harnessStatus 存在时复用
+  `<HarnessStatusBody />`，替换内联 JSX。
+- **新增** `HarnessStatusBody.test.tsx`：2 个渲染单测（有状态 / 无状态占位）。
+
+### 验证
+
+- `HarnessStatusBody.test.tsx` 2/2 通过；typecheck 通过；lint 通过。
+- Ink 渲染效果（无审计产物时 Better Harness 列）：
+  ```
+  Gate pass · 影响半径分析通过（score 1
+  Skill grill-me · invoked
+  ```
+
+### 备注
+
+- 真实 TUI 截图需 node-pty（本机装不上），用 Ink 渲染组件验证替代。
+- 完整发布时间：真实 TUI 需宽终端（≥110 列）时第三列显示。
+
+---
+
 ## v0.21.5-study.2 (2026-08-06)
 
 **主题：激活 ProgressPanel 的 Better Harness 状态面板（feat-dev 流程试跑）**

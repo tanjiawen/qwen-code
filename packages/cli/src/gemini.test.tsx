@@ -19,6 +19,7 @@ import {
   main,
   registerLspHotReload,
   setupUnhandledRejectionHandler,
+  shouldPromptDefaultResume,
   validateDnsResolutionOrder,
 } from './gemini.js';
 import { startInteractiveUI } from './ui/startInteractiveUI.js';
@@ -27,7 +28,11 @@ import type { CliArgs } from './config/config.js';
 import { type LoadedSettings } from './config/settings.js';
 import { appEvents, AppEvent } from './utils/events.js';
 import type { Config } from '@qwen-code/qwen-code-core';
-import { ApprovalMode, OutputFormat } from '@qwen-code/qwen-code-core';
+import {
+  ApprovalMode,
+  InputFormat,
+  OutputFormat,
+} from '@qwen-code/qwen-code-core';
 import { EXTERNAL_TOOL_GUARD_REQUIRED_VALUE } from '@qwen-code/acp-bridge/externalToolGuard';
 
 const mockWriteStderrLine = vi.hoisted(() => vi.fn());
@@ -68,6 +73,53 @@ describe('gemini import boundary', () => {
     expect(source).toMatch(
       /await import\(\s*['"]\.\/core\/initializer\.js['"]\s*\)/,
     );
+  });
+});
+
+describe('shouldPromptDefaultResume', () => {
+  const baseArgv = {
+    resume: undefined,
+    continue: false,
+    prompt: undefined,
+    query: undefined,
+    promptInteractive: undefined,
+    bare: undefined,
+    acp: undefined,
+    experimentalAcp: undefined,
+    inputFormat: undefined,
+    outputFormat: undefined,
+    safeMode: undefined,
+  } as CliArgs;
+
+  it('returns true for a plain interactive TTY startup', () => {
+    expect(shouldPromptDefaultResume(baseArgv, true)).toBe(true);
+  });
+
+  it('returns false when stdin is not a TTY', () => {
+    expect(shouldPromptDefaultResume(baseArgv, false)).toBe(false);
+  });
+
+  it.each([
+    ['has --continue', { continue: true }],
+    ['has --prompt', { prompt: 'x' }],
+    ['has --query', { query: 'x' }],
+    ['has -i (promptInteractive)', { promptInteractive: 'x' }],
+    ['bare mode', { bare: true }],
+    ['acp mode', { acp: true }],
+    ['experimental acp mode', { experimentalAcp: true }],
+    ['stream-json input', { inputFormat: InputFormat.STREAM_JSON }],
+    ['stream-json output', { outputFormat: 'stream-json' }],
+    ['safe mode', { safeMode: true }],
+  ])('returns false when startup %s', (_label, overrides) => {
+    expect(shouldPromptDefaultResume({ ...baseArgv, ...overrides }, true)).toBe(
+      false,
+    );
+  });
+
+  it('returns false when a resume session id is supplied', () => {
+    expect(
+      shouldPromptDefaultResume({ ...baseArgv, resume: 'sess-1' }, true),
+    ).toBe(false);
   });
 });
 

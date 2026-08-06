@@ -5,6 +5,40 @@
 
 ---
 
+## v0.21.5-study.4 (2026-08-06)
+
+**主题：启动时提示恢复上次会话（解决 exit 重进后"不记得"）**
+
+### 背景
+
+用 `exit` 退出后重新进入，新会话默认是空白的——上次会话聊到哪、改了什么、
+下一步做什么都要重新说明。长期记忆（auto-memory）本会话会加载，但会话上下文
+不延续。期望：无参交互式启动时，若当前目录有历史会话，提示用户选择恢复上次
+会话或开新会话（像 Claude Code 的 resume）。
+
+### 变更内容
+
+- **修改** `packages/cli/src/gemini.tsx`：
+  - 抽出并导出 `shouldPromptDefaultResume(argv, isTTY)` 纯函数：判定"是否该提示"
+    （无显式会话 flag、无 prompt/query、TTY、非 bare/safe/acp/stream-json）
+  - 启动流程 Phase D（`--resume` 处理之后）新增默认恢复提示：满足判定且存在
+    历史会话时，复用 `showResumeSessionPicker`（SessionPicker）让用户选恢复哪个
+    会话；Esc/取消 = 开新会话
+- **新增** `packages/cli/src/gemini.test.tsx` 的 `shouldPromptDefaultResume` 单测
+  13 例，覆盖 TTY/非 TTY 与各排除分支
+
+### 验证
+
+- `shouldPromptDefaultResume` 13/13 通过；完整 gemini 套件 72/72 通过（无回归）
+- cli typecheck 通过；`npm run build && npm run typecheck` 全绿
+
+### 备注
+
+- 行为变化：无参交互式启动 + 有历史会话 → 弹会话选择器（选一个恢复、Esc 新建）
+- 全局默认行为，所有用户生效；如觉打扰可后续改为配置开关
+
+---
+
 ## v0.21.5-study.3 (2026-08-06)
 
 **主题：Better Harness 状态列提取为可测组件 + 渲染效果验证**

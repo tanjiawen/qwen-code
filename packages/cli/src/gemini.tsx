@@ -37,6 +37,7 @@ import {
   buildDisabledSkillNamesProvider,
   loadCliConfig,
   parseArguments,
+  type CliArgs,
 } from './config/config.js';
 import type { DnsResolutionOrder } from './config/settings.js';
 import {
@@ -335,6 +336,32 @@ function installInteractiveSignalHandlers(wasRaw: boolean): () => void {
     process.removeListener('SIGINT', handleSigint);
     process.removeListener('SIGHUP', handleSighup);
   };
+}
+
+/**
+ * True when a startup should ask the user whether to resume a previous
+ * session: a plain interactive launch (no explicit session flag, no
+ * prompt/query, attached terminal, not bare/safe/acp/stream-json). The caller
+ * still checks that saved sessions exist before showing the picker.
+ */
+export function shouldPromptDefaultResume(
+  argv: CliArgs,
+  isTTY: boolean,
+): boolean {
+  return (
+    argv.resume === undefined &&
+    !argv.continue &&
+    !argv.prompt &&
+    !argv.query &&
+    !argv.promptInteractive &&
+    isTTY &&
+    !isBareMode(argv.bare) &&
+    !argv.acp &&
+    !argv.experimentalAcp &&
+    argv.inputFormat !== InputFormat.STREAM_JSON &&
+    argv.outputFormat !== 'stream-json' &&
+    !argv.safeMode
+  );
 }
 
 export async function main() {
@@ -799,6 +826,29 @@ export async function main() {
       }
     }
     // else: argv.resume is already a valid UUID, pass through to loadCliConfig
+  }
+
+  // Default resume prompt: a plain interactive startup (no explicit session
+  // flag, no prompt/query, attached terminal, not bare/safe/acp/stream-json)
+  // in a directory that has saved sessions asks the user whether to resume,
+  // so returning to a project picks up the previous conversation instead of
+  // silently starting fresh. Cancelling the picker falls back to a new session.
+  if (shouldPromptDefaultResume(argv, Boolean(process.stdin.isTTY))) {
+    Storage.setRuntimeBaseDir(
+      settings.merged.advanced?.runtimeOutputDir,
+      process.cwd(),
+    );
+    const sessionService = new SessionService(process.cwd());
+    const lastSession = await sessionService.loadLastSession();
+    if (lastSession) {
+      const { showResumeSessionPicker } = await import(
+        './ui/components/StandaloneSessionPicker.js'
+      );
+      const resolvedSessionId = await showResumeSessionPicker();
+      if (resolvedSessionId !== undefined) {
+        argv = { ...argv, resume: resolvedSessionId };
+      }
+    }
   }
 
   // We are now past the logic handling potentially launching a child process

@@ -80,7 +80,8 @@ from the global CSS/portal-root. React 18+19 → ref-sensitive wrappers use
 
 Layered practices enforced (see `engineering-practices/README.md`): mechanical
 (compiles, tests, interface-grep) + required (`grill-me`, `tdd-first`,
-`domain-glossary`, `deep-module`, interface delegation).
+`domain-glossary`, `deep-module`, interface delegation). Non-trivial features →
+`/feat-dev`, bugs → `/bugfix` (blueprints force grill → glossary → failing-test).
 
 ### General workflow
 

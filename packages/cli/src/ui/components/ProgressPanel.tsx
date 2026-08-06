@@ -33,6 +33,7 @@ import {
   useBetterHarnessPanel,
   useHarnessStatus,
 } from '../hooks/use-better-harness-panel.js';
+import { HarnessStatusBody } from './HarnessStatusBody.js';
 
 const POLL_INTERVAL_MS = 1000;
 const BAR_WIDTH = 14;
@@ -606,22 +607,7 @@ export const ProgressPanel: React.FC = () => {
       </Text>
     </>
   ) : harnessStatus ? (
-    <>
-      <Text dimColor>
-        {harnessStatus.gates[0]
-          ? `Gate ${harnessStatus.gates[0].result} · ${
-              harnessStatus.gates[0].detail?.slice(0, 16) ?? ''
-            }`
-          : '无 Gate 记录'}
-      </Text>
-      <Text dimColor>
-        {harnessStatus.skills[0]
-          ? `Skill ${harnessStatus.skills[0].name} · ${
-              harnessStatus.skills[0].status ?? 'invoked'
-            }`
-          : '无 Skill 记录'}
-      </Text>
-    </>
+    <HarnessStatusBody status={harnessStatus} />
   ) : (
     <Text dimColor>未审计 · 运行 /better-harness</Text>
   );

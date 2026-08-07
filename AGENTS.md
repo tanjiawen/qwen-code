@@ -80,8 +80,10 @@ from the global CSS/portal-root. React 18+19 → ref-sensitive wrappers use
 
 Layered practices enforced (see `engineering-practices/README.md`): mechanical
 (compiles, tests, interface-grep) + required (`grill-me`, `tdd-first`,
-`domain-glossary`, `deep-module`, `design-interface`). Non-trivial features →
-`/feat-dev`, bugs → `/bugfix` (blueprints force grill → glossary → failing-test).
+`domain-glossary`, `deep-module`, `design-interface`, `verify-gate`).
+Non-trivial features → `/feat-dev`, bugs → `/bugfix` (blueprints force
+grill → glossary → failing-test → verify-before-done). Edit/read only through
+cache-verified real paths; never invent a path (P2, from OpenCodeReview).
 
 ### General workflow
 

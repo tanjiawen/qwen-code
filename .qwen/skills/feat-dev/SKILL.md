@@ -33,7 +33,7 @@ blueprint:
     - description: 'Implement changes to make the failing test pass and per design doc (green)'
       tool: 'edit'
       requires: 'Dry-run confirms test plan accuracy'
-    - description: 'Verify with full E2E test plan'
+    - description: 'Verify with full E2E test plan (verify-gate: on failure, reflect on the root cause, fix, and re-verify before claiming done)'
       tool: 'agent'
       requires: 'Build and typecheck pass'
     - description: 'Self-audit and code review'
@@ -63,6 +63,11 @@ constraints:
     ordering:
       before: 'Verify with full E2E test plan'
       after: 'Self-audit and code review'
+  - type: mandatory
+    description: 'Do not claim the task complete until deterministic verification passes; on failure, reflect on the root cause, fix, and re-verify (verify-gate)'
+    mandatory:
+      tool: 'run_shell_command'
+      condition: 'Deterministic verification fails'
   - type: ordering
     description: 'Reach a shared design concept (grill-me) before implementation; do not start coding on a vague idea'
     ordering:

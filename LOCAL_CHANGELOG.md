@@ -5,6 +5,44 @@
 
 ---
 
+## v0.21.5-study.5 (2026-08-07)
+
+**主题：OpenCodeReview 确定性工程融入 —— verify-gate 验证闭环 + 防幻觉路径**
+
+### 背景
+
+研读阿里 `alibaba/open-code-review`（OCR）后，把其"确定性工程 × Agent 混合"中
+能适配 qwen-code 的部分落地。核心洞察：OCR 的"验证→LLM 反思→再验证"闭环在
+qwen-code 里机械层（hook）做不了（hook 单向拦截/记录，无法反馈模型继续），
+只能靠 skill/constraint 语义层让模型自觉遵循；机械层只能做单向确定性门禁。
+方案见 `docs/design/open-code-review-integration.md`。
+
+### 变更内容
+
+- **新增** `verify-gate` skill（`engineering-practices/skills/verify-gate/` +
+  `.qwen/skills/verify-gate/`）：blueprint 编码"声称完成前先确定性验证 → 失败
+  反思根因 → 修复 → 再验证"，借鉴 OCR `ReLocateComment`（`internal/diff/relocation.go:33`）
+- **修改** `feat-dev` blueprint：Verify 步骤引用 verify-gate；新增 mandatory
+  constraint"验证通过前不得声称任务完成"
+- **P2 防幻觉路径**：`engineering-practices/AGENTS.partial.md` + `AGENTS.md`
+  加"编辑/读文件必须用缓存验证过的真实路径，不得幻觉"（借鉴 OCR 路径强制注入
+  `internal/llmloop/loop.go:270`）
+- **配套**：`engineering-practices/README.md` skills 表加 `verify-gate`
+
+### 验证
+
+- 核心解析器校验 verify-gate / feat-dev frontmatter 合法
+- `npm run typecheck && npm run build` 通过
+- 相关单测通过
+
+### 边界
+
+- verify-gate 是 Constraint 层（靠遵循），不是 Hook 层（硬拦截）；真正的
+  机械级硬门禁由现有 `stop-truth-guard.sh` 兜底
+- hook 级闭环（验证失败反馈模型继续）需产品级新机制，本期不做
+
+---
+
 ## v0.21.5-study.4 (2026-08-06)
 
 **主题：启动时提示恢复上次会话（解决 exit 重进后"不记得"）**

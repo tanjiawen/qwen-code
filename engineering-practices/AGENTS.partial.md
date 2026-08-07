@@ -26,6 +26,13 @@ Required (advisory constraints, follow unless you can justify otherwise):
   and interfaces; the model fills interface internals; you write tests at the
   interface to verify the model's output. Enforced in feat-dev before
   implementation.
+- **Verify before claiming done** (`verify-gate`): run deterministic
+  verification (typecheck, tests, interface grep) before claiming a task is
+  complete; on failure, reflect on the root cause, fix, and re-verify. Enforced
+  in feat-dev before self-audit.
+- **Real paths only**: edit/read only through paths verified by the file cache;
+  never invent or hallucinate a path. Grounded in OpenCodeReview's forced path
+  injection.
 
 The skills are: `grill-me`, `domain-glossary`, `tdd-first`, `deep-module`,
-`design-interface`.
+`design-interface`, `verify-gate`.

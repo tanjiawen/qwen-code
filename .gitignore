@@ -138,3 +138,6 @@ tmp/
 # Auto-generated computer-use marker can also appear under nested packages.
 **/.qwen/computer-use/
 .playwright-mcp/
+
+# 独立子项目 opendev-ts（有自己的 git 仓库，不纳入外层跟踪）
+opendev-ts/

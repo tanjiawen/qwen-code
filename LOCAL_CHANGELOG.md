@@ -5,6 +5,35 @@
 
 ---
 
+## v0.21.5-study.7 (2026-08-07)
+
+**主题：修复 ocr-review 评审发现的 gemini.tsx 两处问题（P1/P2）**
+
+### 背景
+
+用 `ocr delegate` 对本库最近改动跑了一次完整 OCR 评审，抓到 `gemini.tsx`
+恢复提示的两处真实问题，本次修复。
+
+### 变更内容
+
+- **P1 · maintainability**（`packages/cli/src/gemini.tsx:362`）：`argv.outputFormat`
+  从魔法字符串 `'stream-json'` 改为 `OutputFormat.STREAM_JSON` 常量，与上一行
+  `InputFormat.STREAM_JSON` 保持一致
+- **P2 · bug/健壮性**（`packages/cli/src/gemini.tsx:834-857`）：启动恢复提示块
+  （`loadLastSession()` / `showResumeSessionPicker()`）包上 try/catch——恢复提示是
+  非核心特性，失败应静默回退到新会话，不能阻断整个 CLI 启动
+
+### 验证
+
+- cli typecheck 通过；gemini.test.tsx 72/72 通过；eslint 通过
+
+### 备注
+
+- 这两处是 OCR 评审（ocr delegate 模式）真实抓到的，验证了"确定性工程 × Agent"
+  评审流程的有效性
+
+---
+
 ## v0.21.5-study.6 (2026-08-07)
 
 **主题：OpenCodeReview 完整评审落地为强制子 Agent 调用 + Stop hook 硬拦截**

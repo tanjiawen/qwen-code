@@ -8,6 +8,7 @@ import {
   AuthType,
   type Config,
   InputFormat,
+  OutputFormat,
   isDebugLogFileEnabled,
   isDebugLoggingDegraded,
   isBareMode,
@@ -359,7 +360,7 @@ export function shouldPromptDefaultResume(
     !argv.acp &&
     !argv.experimentalAcp &&
     argv.inputFormat !== InputFormat.STREAM_JSON &&
-    argv.outputFormat !== 'stream-json' &&
+    argv.outputFormat !== OutputFormat.STREAM_JSON &&
     !argv.safeMode
   );
 }
@@ -834,20 +835,25 @@ export async function main() {
   // so returning to a project picks up the previous conversation instead of
   // silently starting fresh. Cancelling the picker falls back to a new session.
   if (shouldPromptDefaultResume(argv, Boolean(process.stdin.isTTY))) {
-    Storage.setRuntimeBaseDir(
-      settings.merged.advanced?.runtimeOutputDir,
-      process.cwd(),
-    );
-    const sessionService = new SessionService(process.cwd());
-    const lastSession = await sessionService.loadLastSession();
-    if (lastSession) {
-      const { showResumeSessionPicker } = await import(
-        './ui/components/StandaloneSessionPicker.js'
+    try {
+      Storage.setRuntimeBaseDir(
+        settings.merged.advanced?.runtimeOutputDir,
+        process.cwd(),
       );
-      const resolvedSessionId = await showResumeSessionPicker();
-      if (resolvedSessionId !== undefined) {
-        argv = { ...argv, resume: resolvedSessionId };
+      const sessionService = new SessionService(process.cwd());
+      const lastSession = await sessionService.loadLastSession();
+      if (lastSession) {
+        const { showResumeSessionPicker } = await import(
+          './ui/components/StandaloneSessionPicker.js'
+        );
+        const resolvedSessionId = await showResumeSessionPicker();
+        if (resolvedSessionId !== undefined) {
+          argv = { ...argv, resume: resolvedSessionId };
+        }
       }
+    } catch {
+      // Resume prompt is best-effort: a failure must not block startup.
+      // Silently fall back to a fresh session.
     }
   }
 

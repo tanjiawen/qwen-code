@@ -5,6 +5,43 @@
 
 ---
 
+## v0.21.5-study.6 (2026-08-07)
+
+**主题：OpenCodeReview 完整评审落地为强制子 Agent 调用 + Stop hook 硬拦截**
+
+### 背景
+
+延续 study.5 的 OCR 融入：把"每次完成代码/工程开发后，对完整代码做 OCR 评审"
+从"可选"升级为**强制**动作——作为独立子 Agent 调用，并由 Stop hook 硬拦截兜底。
+
+### 变更内容
+
+- **新增** `ocr-review` 子 Agent（`.qwen/agents/ocr-review.md`）：systemPrompt 定义
+  用 `ocr delegate` 模式（OCR 做确定性文件选择+规则解析，用本会话 LLM 评审）对
+  当前 git 改动做完整评审，输出结构化报告（类别/严重度/真实行号），最后写
+  `/tmp/qwen-ocr-review/ocr-reviewed` 完成标记
+- **新增** `stop-ocr-review-guard.sh`（Stop hook）：git diff 有源码改动但缺
+  ocr-reviewed 标记 → exit 2 拦截；OCR 未安装时 fail-open（提示不拦截）
+- **新增** `cleanup-ocr-review.sh`（SessionStart）：每会话清理上一轮 OCR 评审标记
+- **注册** `.qwen/settings.json`：SessionStart 清理 + Stop 检查
+- **修改** `feat-dev` blueprint：新增"调用 ocr-review 子 Agent 做完整 OCR 评审"
+  步骤 + mandatory constraint（改过源文件必须跑 OCR 评审）
+- **修改** `AGENTS.md`：声明改源码后必须调用 ocr-review 子 Agent
+
+### 验证
+
+- 需先 `npm install -g @alibaba-group/open-code-review`
+- subagent frontmatter 解析合法；`ocr delegate preview` 输出 review spec
+- Stop hook：无标记时拦截、有标记时放行
+
+### 边界
+
+- OCR 未安装时 hook fail-open（不拦截），避免误伤；安装后自动生效
+- `ocr delegate` 无需为 OCR 单独配 LLM，评审用会话模型
+- 强制是"改了源码必须审"，评审质量由子 Agent 的 LLM 决定（宁缺毋滥）
+
+---
+
 ## v0.21.5-study.5 (2026-08-07)
 
 **主题：OpenCodeReview 确定性工程融入 —— verify-gate 验证闭环 + 防幻觉路径**

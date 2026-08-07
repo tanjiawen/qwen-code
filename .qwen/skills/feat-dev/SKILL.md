@@ -38,10 +38,13 @@ blueprint:
       requires: 'Build and typecheck pass'
     - description: 'Self-audit and code review'
       requires: 'All E2E tests pass'
+    - description: 'Call the ocr-review subagent to run a complete OpenCodeReview of the current changes (ocr delegate mode)'
+      tool: 'agent'
+      requires: 'Self-audit clean'
     - description: 'Wrap up: branch, commit, PR'
       skippable: true
       skipCondition: 'User does not request PR creation'
-      requires: 'Self-audit clean'
+      requires: 'OCR review done'
 constraints:
   - type: ordering
     description: 'Design doc must exist before implementation begins'
@@ -93,6 +96,11 @@ constraints:
     mandatory:
       tool: 'read_file'
       condition: 'GLOSSARY.md exists at the project root'
+  - type: mandatory
+    description: 'After changing source files, call the ocr-review subagent to run a complete OpenCodeReview of the current changes before wrapping up (Stop hook enforces this)'
+    mandatory:
+      tool: 'agent'
+      condition: 'Source files were changed in this task'
 ---
 
 # Feature Development Workflow

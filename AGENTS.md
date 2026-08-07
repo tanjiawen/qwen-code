@@ -84,6 +84,9 @@ Layered practices enforced (see `engineering-practices/README.md`): mechanical
 Non-trivial features → `/feat-dev`, bugs → `/bugfix` (blueprints force
 grill → glossary → failing-test → verify-before-done). Edit/read only through
 cache-verified real paths; never invent a path (P2, from OpenCodeReview).
+After changing source files you **must** call the `ocr-review` subagent to run
+a complete OpenCodeReview of the current changes (ocr delegate mode); a Stop
+hook (`stop-ocr-review-guard.sh`) blocks Stop until it has run.
 
 ### General workflow
 

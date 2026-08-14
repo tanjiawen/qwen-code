@@ -31,7 +31,9 @@ import {
   type WebShellAssistantTurnFooterRenderInfo,
 } from '../customization';
 import { useI18n } from '../i18n';
+import { formatContextTokens } from '../utils/formatTokenCount';
 import { useWebShellPortalRoot } from '../portalRoot';
+import { useTranscriptRenderMode } from '../transcriptRenderMode';
 import { MessageItem } from './MessageItem';
 import type { SessionContentGenerator } from './messages/AssistantMessage';
 import { MessageTimestamp } from './MessageTimestamp';
@@ -44,9 +46,11 @@ import {
 import { ParallelAgentsGroup } from './messages/tools/ParallelAgentsGroup';
 import { useSharedNow } from '../hooks/useSharedNow';
 import {
+  isAskUserQuestionToolName,
   isActiveToolStatus,
   toolContainsCallId,
 } from './messages/toolFormatting';
+import { isTodoWriteToolName } from '../utils/todos';
 import turnCollapseStyles from './TurnCollapseRow.module.css';
 import flashStyles from './MessageLocateFlash.module.css';
 import styles from './MessageList.module.css';
@@ -55,12 +59,19 @@ import { WEB_SHELL_TRANSCRIPT_RELOAD_BLOCKS } from '../constants/sessions';
 const noopTurnOutputAction = () => undefined;
 const RELOAD_TRANSCRIPT_DELAY_MS = 120_000;
 const TURN_LAYOUT_ANIMATION_MS = 180;
+const AGENT_SUMMARY_COLLAPSE_DELAY_MS = 400;
+// A reconciled-terminal sibling whose completion notification is delayed (not
+// lost) lands within moments; bound the unmatched-completion hold so a truly
+// lost notification cannot hide the final footer forever.
+const UNMATCHED_AGENT_COMPLETION_GRACE_MS = 5_000;
 
 interface MessageListProps {
   messages: Message[];
   pendingApproval: PermissionRequest | null;
   /** Run /context detail, exactly like typing it (context-usage panels). */
   onShowContextDetail?: () => void;
+  /** Click an uploaded image in a user message to preview it in the right panel. */
+  onImagePreview?: (src: string, alt?: string) => void;
   loadingTranscript?: boolean;
   catchingUp?: boolean;
   hasOlderHistory?: boolean;
@@ -257,8 +268,19 @@ function isForceExpandGroup(
 }
 
 function isHiddenInCompactMode(msg: Message): boolean {
-  if (msg.role === 'thinking') return true;
-  return false;
+  return msg.role === 'thinking';
+}
+
+function isStandaloneToolGroup(msg: Message): boolean {
+  return (
+    msg.role === 'tool_group' &&
+    msg.tools.some(
+      (tool) =>
+        isSubAgentToolCall(tool) ||
+        isTodoWriteToolName(tool.toolName) ||
+        isAskUserQuestionToolName(tool.toolName),
+    )
+  );
 }
 
 function mergeCompactToolGroups(
@@ -271,7 +293,11 @@ function mergeCompactToolGroups(
   while (i < messages.length) {
     const msg = messages[i];
 
-    if (msg.role !== 'tool_group' || isForceExpandGroup(msg, pendingApproval)) {
+    if (
+      msg.role !== 'tool_group' ||
+      isForceExpandGroup(msg, pendingApproval) ||
+      isStandaloneToolGroup(msg)
+    ) {
       if (!isHiddenInCompactMode(msg)) {
         result.push(msg);
       }
@@ -293,7 +319,8 @@ function mergeCompactToolGroups(
 
       if (
         next.role === 'tool_group' &&
-        !isForceExpandGroup(next, pendingApproval)
+        !isForceExpandGroup(next, pendingApproval) &&
+        !isStandaloneToolGroup(next)
       ) {
         mergeableGroups.push(next);
         lastMergedIdx = j;
@@ -317,6 +344,7 @@ function mergeCompactToolGroups(
       id: mergeableGroups[0].id,
       role: 'tool_group',
       tools: mergedTools,
+      timestamp: mergeableGroups[0].timestamp,
     });
     i = lastMergedIdx + 1;
   }
@@ -468,6 +496,38 @@ export function attachTurnOutputs(
   return result;
 }
 
+export function pinActiveParallelAgentsToTurnEnd(
+  items: DisplayItem[],
+  automaticallyExpandedKeys?: ReadonlySet<string>,
+): DisplayItem[] {
+  const shouldPin = (item: DisplayItem) =>
+    item.type === 'parallel_agents' &&
+    (automaticallyExpandedKeys?.has(item.key) === true ||
+      item.agents.some((agent) => isActiveToolStatus(agent.status)));
+  const hasPinnedGroup = items.some((item) => shouldPin(item));
+  if (!hasPinnedGroup) return items;
+
+  const result: DisplayItem[] = [];
+  let activeGroups: DisplayItem[] = [];
+  const flushActiveGroups = () => {
+    result.push(...activeGroups);
+    activeGroups = [];
+  };
+
+  for (const item of items) {
+    if (item.type === 'message' && isTurnStartMessage(item.message)) {
+      flushActiveGroups();
+      result.push(item);
+    } else if (shouldPin(item)) {
+      activeGroups.push(item);
+    } else {
+      result.push(item);
+    }
+  }
+  flushActiveGroups();
+  return result;
+}
+
 export interface ApplyTurnCollapseOptions {
   /**
    * Per-turn user override keyed by the turn's user-message id:
@@ -481,6 +541,14 @@ export interface ApplyTurnCollapseOptions {
    */
   isResponding: boolean;
   activeTurnStartedAt?: number;
+  backgroundSummaryGraceActive?: boolean;
+  /**
+   * Whether the final turn's collapse should keep waiting for unmatched
+   * background-agent completions. Pass false once the bounded grace expires
+   * so a lost notification cannot pin the turn expanded forever.
+   */
+  waitForUnmatchedAgentCompletions?: boolean;
+  automaticallyExpandedAgentKeys?: ReadonlySet<string>;
   /**
    * Tool-call id of a pending approval, if any. The turn containing it is
    * force-expanded so the inline approve/reject UI is never folded away (mirrors
@@ -534,7 +602,15 @@ function findFinalAnswerIndex(
 
 function collectFinalAssistantTurnIds(
   items: readonly DisplayItem[],
-  isResponding: boolean,
+  {
+    isResponding,
+    latestTurnAwaitsAgentSummary,
+    gateBackgroundAgentStatus,
+  }: {
+    isResponding: boolean;
+    latestTurnAwaitsAgentSummary: boolean;
+    gateBackgroundAgentStatus: boolean;
+  },
 ): ReadonlyMap<string, string> {
   const userIdxs: number[] = [];
   for (let i = 0; i < items.length; i++) {
@@ -546,9 +622,23 @@ function collectFinalAssistantTurnIds(
 
   const turnIdByAssistantId = new Map<string, string>();
   for (let k = 0; k < userIdxs.length; k++) {
-    if (k === userIdxs.length - 1 && isResponding) continue;
     const start = userIdxs[k];
     const end = (k + 1 < userIdxs.length ? userIdxs[k + 1] : items.length) - 1;
+    if (
+      k === userIdxs.length - 1 &&
+      (isResponding ||
+        (gateBackgroundAgentStatus && latestTurnAwaitsAgentSummary))
+    ) {
+      continue;
+    }
+    // A turn that still owns active background-agent work is not final,
+    // whether it is the latest turn or the user has moved on to a newer one.
+    if (
+      gateBackgroundAgentStatus &&
+      turnHasActiveBackgroundAgent(items, start, end)
+    ) {
+      continue;
+    }
     const turnHead = items[start];
     const answerIdx = findFinalAnswerIndex(items, start, end, false);
     if (answerIdx < 0) continue;
@@ -605,16 +695,8 @@ function isHideableStep(item: DisplayItem, isFinalAnswer: boolean): boolean {
   }
 }
 
-function isMidTurnInjectedDebugMessage(message: {
-  content?: string;
-  source?: string;
-}): boolean {
-  return (
-    message.source === 'mid_turn_message_injected' ||
-    message.content?.startsWith(
-      'mid_turn_message_injected (unrecognized daemon event):',
-    ) === true
-  );
+function isMidTurnInjectedDebugMessage(message: { source?: string }): boolean {
+  return message.source === 'mid_turn_message_injected';
 }
 
 export function getTurnTimelineNode(
@@ -1285,7 +1367,7 @@ export function getSessionTimelineRangeForIndexes(
  */
 /** Does any tool-carrying row in [start, end] hold a tool matching `pred`? */
 function someTurnToolCall(
-  items: DisplayItem[],
+  items: readonly DisplayItem[],
   start: number,
   end: number,
   pred: (tool: ACPToolCall) => boolean,
@@ -1327,12 +1409,234 @@ function turnHasActiveAgent(
   );
 }
 
+function turnHasActiveBackgroundAgent(
+  items: readonly DisplayItem[],
+  start: number,
+  end: number,
+): boolean {
+  return someTurnToolCall(
+    items,
+    start,
+    end,
+    (tool) =>
+      isBackgroundSubAgentToolCall(tool) && isActiveToolStatus(tool.status),
+  );
+}
+
+function turnHasAutomaticallyExpandedAgent(
+  items: DisplayItem[],
+  start: number,
+  end: number,
+  automaticallyExpandedAgentKeys: ReadonlySet<string> | undefined,
+): boolean {
+  if (!automaticallyExpandedAgentKeys?.size) return false;
+  for (let i = start; i <= end; i++) {
+    const item = items[i];
+    if (
+      item.type === 'parallel_agents' &&
+      automaticallyExpandedAgentKeys.has(item.key)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function backgroundAgentCallIds(item: DisplayItem): string[] {
+  // Launches core rejected (status 'failed') never registered a background
+  // task, so no completion notification can ever arrive for them; counting
+  // them as awaited would keep the turn open forever.
+  if (item.type === 'parallel_agents') {
+    return item.agents
+      .filter(
+        (agent) =>
+          isBackgroundSubAgentToolCall(agent) && agent.status !== 'failed',
+      )
+      .map((agent) => agent.callId);
+  }
+  if (item.type === 'message' && item.message.role === 'tool_group') {
+    return item.message.tools
+      .filter(
+        (tool) =>
+          isBackgroundSubAgentToolCall(tool) && tool.status !== 'failed',
+      )
+      .map((tool) => tool.callId);
+  }
+  return [];
+}
+
+function backgroundAgentCompletionForMessage(
+  message: Message,
+): { callId?: string } | null {
+  if (
+    message.role !== 'system' ||
+    message.source !== 'background_notification'
+  ) {
+    return null;
+  }
+  const identifiesAgent =
+    message.content
+      ?.trimStart()
+      .toLowerCase()
+      .startsWith('background agent ') === true;
+  const data = message.data;
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return identifiesAgent ? {} : null;
+  }
+  const { kind, toolUseId } = data as {
+    kind?: unknown;
+    toolUseId?: unknown;
+  };
+  if (kind !== 'agent' && !(kind === undefined && identifiesAgent)) return null;
+  return typeof toolUseId === 'string' ? { callId: toolUseId } : {};
+}
+
+function backgroundAgentCompletion(
+  item: DisplayItem,
+): { callId?: string } | null {
+  return item.type === 'message'
+    ? backgroundAgentCompletionForMessage(item.message)
+    : null;
+}
+
+interface BackgroundAgentSummaryState {
+  lastNotificationIndex: number;
+  sawAgentCompletion: boolean;
+  unmatchedAgentCallIds: ReadonlySet<string>;
+}
+
+// Returns null when nothing in this turn's tail awaits a background summary:
+// no notification landed, or a terminal turn status precedes every one.
+function backgroundAgentSummaryState(
+  items: DisplayItem[],
+  start: number,
+  end: number,
+  agentNotificationsOnly: boolean,
+): BackgroundAgentSummaryState | null {
+  let lastNotificationIndex = -1;
+  let latestNotificationAgentCallId: string | undefined;
+  for (let i = end; i > start; i--) {
+    const item = items[i];
+    if (item.type !== 'message' || item.message.role !== 'system') continue;
+    if (
+      item.message.source === 'turn_error' ||
+      item.message.source === 'prompt_cancelled'
+    ) {
+      if (lastNotificationIndex < 0) return null;
+      continue;
+    }
+    if (item.message.source === 'background_notification') {
+      const completion = backgroundAgentCompletion(item);
+      if (agentNotificationsOnly && !completion) continue;
+      if (lastNotificationIndex < 0) {
+        lastNotificationIndex = i;
+        latestNotificationAgentCallId = completion?.callId;
+      }
+    }
+  }
+  if (lastNotificationIndex < 0) return null;
+
+  let latestAgentLaunchIndex = -1;
+  if (latestNotificationAgentCallId) {
+    for (let i = end; i >= 0; i--) {
+      if (
+        backgroundAgentCallIds(items[i]).includes(latestNotificationAgentCallId)
+      ) {
+        latestAgentLaunchIndex = i;
+        break;
+      }
+    }
+  }
+  // A notification can land turns after its launch, so the callId-correlated
+  // scan above may cross turns. The anonymous fallback must stay inside this
+  // turn: sweeping older turns would let a launch whose notification was lost
+  // pin this turn open forever.
+  for (let i = end; i >= start; i--) {
+    if (latestAgentLaunchIndex >= 0) break;
+    if (backgroundAgentCallIds(items[i]).length > 0) {
+      latestAgentLaunchIndex = i;
+      break;
+    }
+  }
+
+  const unmatchedAgentCallIds = new Set<string>();
+  let sawAgentCompletion = false;
+  if (latestAgentLaunchIndex >= 0) {
+    let batchStart = latestAgentLaunchIndex;
+    for (let i = latestAgentLaunchIndex; i >= 0; i--) {
+      const item = items[i];
+      if (item.type === 'message' && isTurnStartMessage(item.message)) {
+        batchStart = i;
+        break;
+      }
+    }
+
+    const anonymousCompletionCandidates: Array<ReadonlySet<string>> = [];
+    for (let i = batchStart; i <= end; i++) {
+      const item = items[i];
+      for (const callId of backgroundAgentCallIds(item)) {
+        unmatchedAgentCallIds.add(callId);
+      }
+      const completion = backgroundAgentCompletion(item);
+      if (!completion) continue;
+      sawAgentCompletion = true;
+      if (completion.callId) {
+        unmatchedAgentCallIds.delete(completion.callId);
+      } else {
+        anonymousCompletionCandidates.push(new Set(unmatchedAgentCallIds));
+      }
+    }
+    for (const candidates of anonymousCompletionCandidates) {
+      for (const callId of candidates) {
+        if (!unmatchedAgentCallIds.has(callId)) continue;
+        unmatchedAgentCallIds.delete(callId);
+        break;
+      }
+    }
+  }
+  return { lastNotificationIndex, sawAgentCompletion, unmatchedAgentCallIds };
+}
+
+function turnAwaitsBackgroundSummary(
+  items: DisplayItem[],
+  start: number,
+  end: number,
+  agentNotificationsOnly = false,
+  waitForUnmatchedAgentCompletions = true,
+): boolean {
+  const state = backgroundAgentSummaryState(
+    items,
+    start,
+    end,
+    agentNotificationsOnly,
+  );
+  if (!state) return false;
+  // A lost completion may hold the turn only for the caller's grace window;
+  // the ordering rule below is reserved for matched notifications whose
+  // summary narration is still expected.
+  if (state.sawAgentCompletion && state.unmatchedAgentCallIds.size > 0) {
+    return waitForUnmatchedAgentCompletions;
+  }
+  for (let i = state.lastNotificationIndex + 1; i <= end; i++) {
+    const item = items[i];
+    if (item.type === 'message' && item.message.role === 'thinking') {
+      return false;
+    }
+  }
+  return (
+    findFinalAnswerIndex(items, start, end, false) < state.lastNotificationIndex
+  );
+}
+
 export function applyTurnCollapse(
   items: DisplayItem[],
   {
     overrides,
     isResponding,
     activeTurnStartedAt,
+    backgroundSummaryGraceActive = true,
+    waitForUnmatchedAgentCompletions = true,
+    automaticallyExpandedAgentKeys,
     pendingApprovalCallId,
     includeSubagentToolUsageInMetrics = true,
     enabled,
@@ -1360,8 +1664,25 @@ export function applyTurnCollapse(
     const head = items[start] as Extract<DisplayItem, { type: 'message' }>;
     const turnId = head.message.id;
     const promptTs = head.message.timestamp;
-    const isActiveTurn = k === userIdxs.length - 1 && isResponding;
+    const isLastTurn = k === userIdxs.length - 1;
+    const isActiveTurn = isLastTurn && isResponding;
     const hasActiveAgent = turnHasActiveAgent(items, start, end);
+    const hasAutomaticallyExpandedAgent = turnHasAutomaticallyExpandedAgent(
+      items,
+      start,
+      end,
+      automaticallyExpandedAgentKeys,
+    );
+    const awaitsBackgroundSummary =
+      isLastTurn &&
+      backgroundSummaryGraceActive &&
+      turnAwaitsBackgroundSummary(
+        items,
+        start,
+        end,
+        false,
+        waitForUnmatchedAgentCompletions,
+      );
     const hasPendingApproval = turnOwnsCallId(
       items,
       start,
@@ -1427,9 +1748,10 @@ export function applyTurnCollapse(
       }
     }
 
-    const liveStartedAt = isActiveTurn
-      ? (activeTurnStartedAt ?? promptTs ?? Date.now())
-      : undefined;
+    const liveStartedAt =
+      isActiveTurn || awaitsBackgroundSummary
+        ? (activeTurnStartedAt ?? promptTs ?? Date.now())
+        : undefined;
     const lastStepTs = terminalTs ?? assistantTs;
     const elapsedMs =
       promptTs !== undefined &&
@@ -1448,13 +1770,17 @@ export function applyTurnCollapse(
     }
 
     // A turn with foldable steps gets a chevron and defaults to expanded while
-    // streaming, while a subagent is still active, when the turn errored, or
-    // when there is no final answer; otherwise it collapses once complete. A
+    // streaming, while a subagent is still active, or when the latest turn is
+    // incomplete; otherwise it collapses once a newer turn starts. A
     // step-less turn (e.g. a plain "hi" reply) has nothing to fold, so it stays
     // expanded and shows a chevron-less metrics line. An explicit user toggle
     // always wins.
     const shouldStayOpen =
-      isActiveTurn || hasActiveAgent || hasTurnError || answerIdx < 0;
+      isActiveTurn ||
+      hasActiveAgent ||
+      hasAutomaticallyExpandedAgent ||
+      awaitsBackgroundSummary ||
+      ((hasTurnError || answerIdx < 0) && isLastTurn);
     const expanded =
       hiddenCount === 0
         ? true
@@ -1606,7 +1932,8 @@ const ESTIMATE_MESSAGE = 80;
 const ESTIMATE_TURN_COLLAPSE = 32;
 const ESTIMATE_TAIL = 240;
 const FOLLOW_BOTTOM_THRESHOLD_PX = 30;
-const LOAD_OLDER_HISTORY_THRESHOLD_PX = 48;
+const LOAD_OLDER_HISTORY_THRESHOLD_PX = 160;
+const OLDER_HISTORY_ANCHOR_WAIT_FRAMES = 30;
 export const VIRTUAL_SCROLL_THRESHOLD = 200;
 const SESSION_TIMELINE_MIN_VISIBLE_ENTRIES = 4;
 
@@ -1617,16 +1944,19 @@ export function shouldUseVirtualScroll(
   return totalCount > threshold;
 }
 
+export function shouldAdjustVirtualScrollPosition(
+  itemEnd: number,
+  scrollOffset: number,
+): boolean {
+  return itemEnd <= scrollOffset;
+}
+
 function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
   if (totalSeconds < 60) return `${totalSeconds}s`;
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds - minutes * 60;
   return `${minutes}m ${seconds}s`;
-}
-
-function formatTokenCount(tokens: number): string {
-  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : `${tokens}`;
 }
 
 type Translate = (
@@ -1650,11 +1980,11 @@ function tokenMetricText(collapse: TurnCollapseHead, t: Translate): string {
   const cachedTokens = collapse.cachedTokens ?? 0;
   const cached =
     cachedTokens > 0 && collapse.inputTokens > 0
-      ? ` (${formatTokenCount(cachedTokens)} ${t('turn.cached')}, ${Math.round(
+      ? ` (${formatContextTokens(cachedTokens)} ${t('turn.cached')}, ${Math.round(
           (cachedTokens / collapse.inputTokens) * 100,
         )}%)`
       : '';
-  return `↑${formatTokenCount(collapse.inputTokens)}${cached} ↓${formatTokenCount(
+  return `↑${formatContextTokens(collapse.inputTokens)}${cached} ↓${formatContextTokens(
     collapse.outputTokens,
   )}`;
 }
@@ -2218,6 +2548,7 @@ export const MessageList = memo(
       messages,
       pendingApproval,
       onShowContextDetail,
+      onImagePreview,
       loadingTranscript,
       catchingUp,
       hasOlderHistory = false,
@@ -2261,6 +2592,7 @@ export const MessageList = memo(
     ref,
   ) {
     const { t } = useI18n();
+    const transcriptRenderMode = useTranscriptRenderMode();
     const compactMode = useContext(CompactModeContext);
     const mergedMessages = useMemo(
       () =>
@@ -2286,8 +2618,222 @@ export const MessageList = memo(
         turnScheduledTasks,
       ],
     );
+    const latestBackgroundNotificationId = useMemo(() => {
+      for (let i = mergedMessages.length - 1; i >= 0; i -= 1) {
+        const message = mergedMessages[i];
+        if (
+          message?.role === 'system' &&
+          message.source === 'background_notification'
+        ) {
+          return message.id;
+        }
+      }
+      return null;
+    }, [mergedMessages]);
+    const [
+      backgroundNotificationBaselineId,
+      setBackgroundNotificationBaselineId,
+    ] = useState<string | null>(latestBackgroundNotificationId);
+    const loadingBackgroundNotificationHistory = Boolean(
+      loadingTranscript || catchingUp,
+    );
+    const wasLoadingBackgroundNotificationHistory = useRef(
+      loadingBackgroundNotificationHistory,
+    );
+    const hasEstablishedBackgroundNotificationBaseline = useRef(
+      mergedMessages.length > 0,
+    );
+    const firstMessageBatchEstablishesBackgroundNotificationBaseline =
+      !hasEstablishedBackgroundNotificationBaseline.current &&
+      mergedMessages.length > 0;
+    const establishingBackgroundNotificationBaseline =
+      loadingBackgroundNotificationHistory ||
+      wasLoadingBackgroundNotificationHistory.current ||
+      firstMessageBatchEstablishesBackgroundNotificationBaseline;
+    useLayoutEffect(() => {
+      if (establishingBackgroundNotificationBaseline) {
+        setBackgroundNotificationBaselineId(latestBackgroundNotificationId);
+      }
+      if (mergedMessages.length > 0) {
+        hasEstablishedBackgroundNotificationBaseline.current = true;
+      }
+      wasLoadingBackgroundNotificationHistory.current =
+        loadingBackgroundNotificationHistory;
+    }, [
+      establishingBackgroundNotificationBaseline,
+      latestBackgroundNotificationId,
+      loadingBackgroundNotificationHistory,
+      mergedMessages.length,
+    ]);
+    const backgroundSummaryGraceActive =
+      !establishingBackgroundNotificationBaseline &&
+      latestBackgroundNotificationId !== null &&
+      backgroundNotificationBaselineId !== latestBackgroundNotificationId;
+    const latestTurnStartIndex = useMemo(() => {
+      for (let i = displayItems.length - 1; i >= 0; i -= 1) {
+        const item = displayItems[i];
+        if (item.type === 'message' && isTurnStartMessage(item.message)) {
+          return i;
+        }
+      }
+      return 0;
+    }, [displayItems]);
+    // Forced-'pending' background-agent statuses only mean "live work" where
+    // reconciliation can classify them; a static transcript has no live state,
+    // so a stale card there must not suppress the final footer.
+    const gateBackgroundAgentStatus = transcriptRenderMode === 'interactive';
+    const latestTurnHasActiveBackgroundAgent = useMemo(
+      () =>
+        gateBackgroundAgentStatus &&
+        turnHasActiveBackgroundAgent(
+          displayItems,
+          latestTurnStartIndex,
+          displayItems.length - 1,
+        ),
+      [displayItems, gateBackgroundAgentStatus, latestTurnStartIndex],
+    );
+    const latestTurnBackgroundSummaryState = useMemo(
+      () =>
+        backgroundAgentSummaryState(
+          displayItems,
+          latestTurnStartIndex,
+          displayItems.length - 1,
+          true,
+        ),
+      [displayItems, latestTurnStartIndex],
+    );
+    // The grace reset/timer keys on the unmatched set, not the raw
+    // notification id: a notification that cannot change which agents are
+    // unmatched — an earlier-turn agent completing, or any monitor/shell-task
+    // notification — must neither restart the bound nor re-arm an expired one.
+    const latestTurnUnmatchedAgentKey = useMemo(() => {
+      const callIds = latestTurnBackgroundSummaryState?.unmatchedAgentCallIds;
+      return callIds && callIds.size > 0 ? [...callIds].sort().join('|') : '';
+    }, [latestTurnBackgroundSummaryState]);
+    const latestTurnHoldsUnmatchedAgentCompletion =
+      backgroundSummaryGraceActive &&
+      !latestTurnHasActiveBackgroundAgent &&
+      (latestTurnBackgroundSummaryState?.sawAgentCompletion ?? false) &&
+      (latestTurnBackgroundSummaryState?.unmatchedAgentCallIds.size ?? 0) > 0;
+    const [
+      unmatchedCompletionGraceExpired,
+      setUnmatchedCompletionGraceExpired,
+    ] = useState(false);
+    // Re-arm the latch only when the episode changes: the unmatched set or
+    // the turn itself changed, or streaming ended and the hold can gate the
+    // footer again. A benign matched-notification hold never consumes the
+    // latch because the timer below only runs for unmatched completions.
+    useEffect(() => {
+      setUnmatchedCompletionGraceExpired(false);
+    }, [latestTurnUnmatchedAgentKey, latestTurnStartIndex, isResponding]);
+    useEffect(() => {
+      // isResponding hides the turn anyway, so the grace must not be
+      // consumed while streaming; the full window starts when the hold can
+      // actually gate the final footer.
+      if (!latestTurnHoldsUnmatchedAgentCompletion || isResponding) return;
+      const timer = setTimeout(
+        () => setUnmatchedCompletionGraceExpired(true),
+        UNMATCHED_AGENT_COMPLETION_GRACE_MS,
+      );
+      return () => clearTimeout(timer);
+    }, [
+      latestTurnHoldsUnmatchedAgentCompletion,
+      latestTurnUnmatchedAgentKey,
+      latestTurnStartIndex,
+      isResponding,
+    ]);
+    const latestTurnAwaitsAgentSummary = useMemo(
+      () =>
+        backgroundSummaryGraceActive &&
+        turnAwaitsBackgroundSummary(
+          displayItems,
+          latestTurnStartIndex,
+          displayItems.length - 1,
+          true,
+          latestTurnHasActiveBackgroundAgent ||
+            !unmatchedCompletionGraceExpired,
+        ),
+      [
+        backgroundSummaryGraceActive,
+        displayItems,
+        latestTurnHasActiveBackgroundAgent,
+        latestTurnStartIndex,
+        unmatchedCompletionGraceExpired,
+      ],
+    );
+    const latestTurnParallelAgentKeys = useMemo(() => {
+      const keys = new Set<string>();
+      for (let i = latestTurnStartIndex; i < displayItems.length; i += 1) {
+        const item = displayItems[i];
+        if (item.type === 'parallel_agents') keys.add(item.key);
+      }
+      return keys;
+    }, [displayItems, latestTurnStartIndex]);
+    const backgroundSummaryAgentContext = useMemo(() => {
+      if (!backgroundSummaryGraceActive) {
+        return {
+          key: null,
+          agentNotificationIsLatestBackground: false,
+          latestBackgroundNotificationInLatestTurn: false,
+        };
+      }
+      let latestBackgroundNotificationIndex = -1;
+      let notificationIndex = -1;
+      let callId: string | undefined;
+      for (let i = displayItems.length - 1; i >= 0; i -= 1) {
+        const item = displayItems[i];
+        if (
+          item.type !== 'message' ||
+          item.message.role !== 'system' ||
+          item.message.source !== 'background_notification'
+        ) {
+          continue;
+        }
+        if (latestBackgroundNotificationIndex < 0) {
+          latestBackgroundNotificationIndex = i;
+        }
+        const completion = backgroundAgentCompletion(item);
+        if (!completion) continue;
+        notificationIndex = i;
+        callId = completion.callId;
+        break;
+      }
+      for (let i = notificationIndex - 1; i >= 0; i -= 1) {
+        const item = displayItems[i];
+        if (item.type !== 'parallel_agents') continue;
+        if (!callId || item.agents.some((agent) => agent.callId === callId)) {
+          return {
+            key: item.key,
+            agentNotificationIsLatestBackground:
+              notificationIndex === latestBackgroundNotificationIndex,
+            latestBackgroundNotificationInLatestTurn:
+              notificationIndex > latestTurnStartIndex,
+          };
+        }
+      }
+      return {
+        key: null,
+        agentNotificationIsLatestBackground: false,
+        latestBackgroundNotificationInLatestTurn:
+          notificationIndex > latestTurnStartIndex,
+      };
+    }, [backgroundSummaryGraceActive, displayItems, latestTurnStartIndex]);
     const [isSessionTimelineVisible, setIsSessionTimelineVisible] =
       useState(false);
+    const [automaticallyExpandedAgentKeys, setAutomaticallyExpandedAgentKeys] =
+      useState<ReadonlySet<string>>(() => new Set());
+    const handleAutomaticAgentExpansionChange = useCallback(
+      (key: string, expanded: boolean) => {
+        setAutomaticallyExpandedAgentKeys((current) => {
+          if (current.has(key) === expanded) return current;
+          const next = new Set(current);
+          if (expanded) next.add(key);
+          else next.delete(key);
+          return next;
+        });
+      },
+      [],
+    );
     const sessionTimelineCache = useRef<{
       signature: string;
       t: typeof t;
@@ -2349,8 +2895,18 @@ export const MessageList = memo(
       return null;
     }, [isResponding, mergedMessages]);
     const finalAssistantTurnIdByAssistantId = useMemo(
-      () => collectFinalAssistantTurnIds(displayItems, isResponding),
-      [displayItems, isResponding],
+      () =>
+        collectFinalAssistantTurnIds(displayItems, {
+          isResponding,
+          latestTurnAwaitsAgentSummary,
+          gateBackgroundAgentStatus,
+        }),
+      [
+        displayItems,
+        gateBackgroundAgentStatus,
+        isResponding,
+        latestTurnAwaitsAgentSummary,
+      ],
     );
 
     // ── Per-turn collapse ────────────────────────────────────────────────
@@ -2375,8 +2931,10 @@ export const MessageList = memo(
     const userScrollIntentUntil = useRef(0);
     const lastScrollTop = useRef(0);
     const olderHistoryLoadInFlight = useRef(false);
+    const olderHistoryLoadGeneration = useRef(0);
     const scrollCooldown = useRef(false);
     const scrollCooldownCount = useRef(0);
+    const pendingBottomFollowAfterCooldown = useRef(false);
     const sessionTimelineFrame = useRef<number | null>(null);
     const lastReportedCanScrollToBottom = useRef<boolean | null>(null);
     const didTrackLastUserMsgRef = useRef(false);
@@ -2400,6 +2958,10 @@ export const MessageList = memo(
     catchingUpRef.current = catchingUp;
     const containerRef = useRef<HTMLDivElement>(null);
     const olderHistoryRetryBlocked = useRef(false);
+    const olderHistoryAnchorFrame = useRef<number | undefined>(undefined);
+    const olderHistoryAnchorWaitFrame = useRef<number | undefined>(undefined);
+    const olderHistoryTopCheckFrame = useRef<number | undefined>(undefined);
+    const pendingOlderHistoryTopLoad = useRef<number | undefined>(undefined);
     const reloadTranscriptTimer = useRef<number | undefined>(undefined);
     const reloadTranscriptAbort = useRef<AbortController | undefined>(
       undefined,
@@ -2422,23 +2984,19 @@ export const MessageList = memo(
     const [olderHistoryAnchor, setOlderHistoryAnchor] = useState<{
       scrollHeight: number;
       scrollTop: number;
+      messageCount: number;
+      virtual: boolean;
+      settled: boolean;
+      generation: number;
+      rowKey?: string;
+      rowTop?: number;
     } | null>(null);
+    const restoringOlderHistoryRef = useRef(false);
+    restoringOlderHistoryRef.current = olderHistoryAnchor?.virtual === true;
     const [
       suppressOlderHistoryLoadingStatus,
       setSuppressOlderHistoryLoadingStatus,
     ] = useState(false);
-
-    useLayoutEffect(() => {
-      if (!olderHistoryAnchor) return;
-      const current = containerRef.current;
-      if (current) {
-        current.scrollTop =
-          olderHistoryAnchor.scrollTop +
-          Math.max(0, current.scrollHeight - olderHistoryAnchor.scrollHeight);
-      }
-      olderHistoryLoadInFlight.current = false;
-      setOlderHistoryAnchor(null);
-    }, [olderHistoryAnchor]);
 
     useEffect(() => {
       if (!hasOlderHistory) {
@@ -2480,6 +3038,11 @@ export const MessageList = memo(
         overrides: collapseOverrides,
         isResponding,
         activeTurnStartedAt,
+        backgroundSummaryGraceActive,
+        waitForUnmatchedAgentCompletions:
+          latestTurnHasActiveBackgroundAgent ||
+          !unmatchedCompletionGraceExpired,
+        automaticallyExpandedAgentKeys,
         pendingApprovalCallId: pendingApproval?.toolCallId ?? null,
         includeSubagentToolUsageInMetrics,
         enabled: collapseEnabled,
@@ -2510,28 +3073,45 @@ export const MessageList = memo(
             };
           })
         : collapsedItems;
-      if (!hideFirstUserMessage) return itemsWithMetrics;
+      const pinnedItems = pinActiveParallelAgentsToTurnEnd(
+        itemsWithMetrics,
+        automaticallyExpandedAgentKeys,
+      );
+      if (!hideFirstUserMessage) return pinnedItems;
       const firstUserId = mergedMessages.find(
         (message) => message.role === 'user',
       )?.id;
       return firstUserId
-        ? itemsWithMetrics.filter(
+        ? pinnedItems.filter(
             (item) =>
               item.type !== 'message' || item.message.id !== firstUserId,
           )
-        : itemsWithMetrics;
+        : pinnedItems;
     }, [
       displayItems,
       collapseOverrides,
       isResponding,
       activeTurnStartedAt,
+      backgroundSummaryGraceActive,
+      latestTurnHasActiveBackgroundAgent,
+      unmatchedCompletionGraceExpired,
       pendingApproval?.toolCallId,
       collapseEnabled,
       hideFirstUserMessage,
       firstTurnMetrics,
       includeSubagentToolUsageInMetrics,
       mergedMessages,
+      automaticallyExpandedAgentKeys,
     ]);
+    const visibleItemsRef = useRef(visibleItems);
+    visibleItemsRef.current = visibleItems;
+    const hasVisibleRowKey = useCallback(
+      (key: string) =>
+        visibleItemsRef.current.some(
+          (item) => String(getDisplayItemVirtualKey(item)) === key,
+        ),
+      [],
+    );
     const visibleTurnIdByDisplayIndex = useMemo(
       () => getTurnIdByDisplayIndex(visibleItems),
       [visibleItems],
@@ -2753,6 +3333,15 @@ export const MessageList = memo(
         if (pendingOverflowFrame.current !== undefined) {
           window.cancelAnimationFrame(pendingOverflowFrame.current);
         }
+        if (olderHistoryAnchorFrame.current !== undefined) {
+          window.cancelAnimationFrame(olderHistoryAnchorFrame.current);
+        }
+        if (olderHistoryAnchorWaitFrame.current !== undefined) {
+          window.cancelAnimationFrame(olderHistoryAnchorWaitFrame.current);
+        }
+        if (olderHistoryTopCheckFrame.current !== undefined) {
+          window.cancelAnimationFrame(olderHistoryTopCheckFrame.current);
+        }
         cancelTranscriptReload();
         if (transcriptBottomScrollFrame.current !== undefined) {
           window.cancelAnimationFrame(transcriptBottomScrollFrame.current);
@@ -2908,6 +3497,7 @@ export const MessageList = memo(
         const el = getScrollElement();
         if (!el) return;
         if (el.scrollHeight <= el.clientHeight) return;
+        pendingBottomFollowAfterCooldown.current = false;
         scrollCooldownCount.current += 1;
         const gen = scrollCooldownCount.current;
         scrollCooldown.current = true;
@@ -2920,9 +3510,21 @@ export const MessageList = memo(
         lastScrollTop.current = Math.max(0, el.scrollHeight - el.clientHeight);
         reportCanScrollToBottom();
         const releaseCooldown = () => {
-          if (scrollCooldownCount.current === gen) {
-            scrollCooldown.current = false;
-          }
+          if (scrollCooldownCount.current !== gen) return;
+          scrollCooldown.current = false;
+          if (!pendingBottomFollowAfterCooldown.current) return;
+          pendingBottomFollowAfterCooldown.current = false;
+          if (catchingUpRef.current || followPausedByUserRef.current) return;
+          const current = getScrollElement();
+          if (!current || current.scrollHeight <= current.clientHeight) return;
+          setShouldFollow(true);
+          current.scrollTop = current.scrollHeight;
+          scheduleScrollOverflowReport();
+          lastScrollTop.current = Math.max(
+            0,
+            current.scrollHeight - current.clientHeight,
+          );
+          reportCanScrollToBottom();
         };
         if (behavior === 'smooth') {
           setTimeout(releaseCooldown, 350);
@@ -2930,7 +3532,12 @@ export const MessageList = memo(
           requestAnimationFrame(releaseCooldown);
         }
       },
-      [getScrollElement, reportCanScrollToBottom, scheduleScrollOverflowReport],
+      [
+        getScrollElement,
+        reportCanScrollToBottom,
+        scheduleScrollOverflowReport,
+        setShouldFollow,
+      ],
     );
 
     const resumeBottomFollow = useCallback(
@@ -2955,9 +3562,120 @@ export const MessageList = memo(
         return ESTIMATE_MESSAGE;
       },
       overscan: 20,
+      anchorTo: 'end',
       useFlushSync: false,
       useAnimationFrameWithResizeObserver: true,
+      directDomUpdates: true,
     });
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (
+      item,
+      _delta,
+      instance,
+    ) =>
+      shouldAdjustVirtualScrollPosition(
+        item.end,
+        containerRef.current?.scrollTop ?? instance.scrollOffset ?? 0,
+      );
+    const measureVirtualRow = useCallback(
+      (node: HTMLDivElement | null) => {
+        virtualizer.measureElement(node);
+        if (!node || !restoringOlderHistoryRef.current) return;
+        const index = Number(node.dataset.index);
+        if (
+          Number.isFinite(index) &&
+          !virtualizer.itemSizeCache.has(getItemKey(index))
+        ) {
+          virtualizer.resizeItem(index, node.offsetHeight);
+        }
+      },
+      [getItemKey, virtualizer],
+    );
+    useLayoutEffect(() => {
+      if (!olderHistoryAnchor) return;
+      const current = containerRef.current;
+      if (
+        olderHistoryAnchor.rowKey &&
+        !hasVisibleRowKey(olderHistoryAnchor.rowKey)
+      ) {
+        if (
+          olderHistoryAnchor.generation === olderHistoryLoadGeneration.current
+        ) {
+          olderHistoryLoadGeneration.current += 1;
+        }
+        olderHistoryLoadInFlight.current = false;
+        pendingOlderHistoryTopLoad.current = undefined;
+        setSuppressOlderHistoryLoadingStatus(false);
+        setOlderHistoryAnchor(null);
+        return;
+      }
+      if (!olderHistoryAnchor.settled) return;
+      if (!current) {
+        olderHistoryLoadInFlight.current = false;
+        setOlderHistoryAnchor(null);
+        return;
+      }
+      const unchanged = olderHistoryAnchor.virtual
+        ? mergedMessages.length === olderHistoryAnchor.messageCount
+        : current.scrollHeight === olderHistoryAnchor.scrollHeight;
+      if (unchanged) {
+        if (olderHistoryAnchorFrame.current !== undefined) return;
+        olderHistoryAnchorFrame.current = requestAnimationFrame(() => {
+          olderHistoryAnchorFrame.current = undefined;
+          if (
+            olderHistoryAnchor.generation !== olderHistoryLoadGeneration.current
+          ) {
+            return;
+          }
+          olderHistoryLoadInFlight.current = false;
+          setOlderHistoryAnchor((anchor) =>
+            anchor === olderHistoryAnchor ? null : anchor,
+          );
+        });
+        return;
+      }
+      if (olderHistoryAnchorFrame.current !== undefined) {
+        cancelAnimationFrame(olderHistoryAnchorFrame.current);
+        olderHistoryAnchorFrame.current = undefined;
+      }
+      olderHistoryAnchorFrame.current = requestAnimationFrame(() => {
+        olderHistoryAnchorFrame.current = undefined;
+        if (
+          olderHistoryAnchor.generation !== olderHistoryLoadGeneration.current
+        ) {
+          return;
+        }
+        if (
+          olderHistoryAnchor.rowKey &&
+          !hasVisibleRowKey(olderHistoryAnchor.rowKey)
+        ) {
+          olderHistoryLoadInFlight.current = false;
+          setOlderHistoryAnchor(null);
+          return;
+        }
+        const anchorRow = olderHistoryAnchor.rowKey
+          ? Array.from(
+              current.querySelectorAll<HTMLElement>('[data-message-row-key]'),
+            ).find(
+              (row) => row.dataset.messageRowKey === olderHistoryAnchor.rowKey,
+            )
+          : undefined;
+        if (anchorRow && olderHistoryAnchor.rowTop !== undefined) {
+          current.scrollTop +=
+            anchorRow.getBoundingClientRect().top - olderHistoryAnchor.rowTop;
+        } else {
+          current.scrollTop =
+            olderHistoryAnchor.scrollTop +
+            Math.max(0, current.scrollHeight - olderHistoryAnchor.scrollHeight);
+        }
+        olderHistoryLoadInFlight.current = false;
+        setOlderHistoryAnchor(null);
+      });
+    }, [
+      hasVisibleRowKey,
+      mergedMessages.length,
+      olderHistoryAnchor,
+      visibleItems,
+    ]);
     const virtualItems = virtualizer.getVirtualItems();
     const totalVirtualSize = virtualizer.getTotalSize();
     const sessionTimelineRangeState = useRef<{
@@ -3221,29 +3939,156 @@ export const MessageList = memo(
         }
         olderHistoryRetryBlocked.current = false;
         olderHistoryLoadInFlight.current = true;
-        setSuppressOlderHistoryLoadingStatus(!allowRetry);
+        const generation = ++olderHistoryLoadGeneration.current;
+        setSuppressOlderHistoryLoadingStatus(!force);
+        let virtualAnchor:
+          | {
+              rowKey: string;
+              rowTop: number;
+            }
+          | undefined;
+        if (useVirtualScroll) {
+          const firstMessageKey = String(getItemKey(headerOffset));
+          let remainingFrames = OLDER_HISTORY_ANCHOR_WAIT_FRAMES;
+          virtualAnchor = await new Promise<
+            | {
+                rowKey: string;
+                rowTop: number;
+              }
+            | undefined
+          >((resolve) => {
+            const waitForTopRange = () => {
+              olderHistoryAnchorWaitFrame.current = undefined;
+              if (
+                generation !== olderHistoryLoadGeneration.current ||
+                containerRef.current !== el ||
+                !hasVisibleRowKey(firstMessageKey) ||
+                remainingFrames-- <= 0
+              ) {
+                resolve(undefined);
+                return;
+              }
+              const firstMessageRow = Array.from(
+                el.querySelectorAll<HTMLElement>('[data-message-row-key]'),
+              ).find((row) => row.dataset.messageRowKey === firstMessageKey);
+              if (firstMessageRow) {
+                resolve({
+                  rowKey: firstMessageKey,
+                  rowTop: firstMessageRow.getBoundingClientRect().top,
+                });
+              } else {
+                olderHistoryAnchorWaitFrame.current =
+                  requestAnimationFrame(waitForTopRange);
+              }
+            };
+            olderHistoryAnchorWaitFrame.current =
+              requestAnimationFrame(waitForTopRange);
+          });
+          if (!virtualAnchor) {
+            if (generation === olderHistoryLoadGeneration.current) {
+              olderHistoryLoadInFlight.current = false;
+              pendingOlderHistoryTopLoad.current = undefined;
+              setSuppressOlderHistoryLoadingStatus(false);
+            }
+            return;
+          }
+        }
         const previousHeight = el.scrollHeight;
         const previousTop = el.scrollTop;
+        const viewportTop = el.getBoundingClientRect().top;
+        const anchorRow = virtualAnchor
+          ? undefined
+          : Array.from(
+              el.querySelectorAll<HTMLElement>('[data-message-row-key]'),
+            ).find((row) => {
+              const key = row.dataset.messageRowKey;
+              return (
+                key !== undefined &&
+                key.startsWith('msg:') &&
+                row.getBoundingClientRect().bottom > viewportTop
+              );
+            });
         followPausedByUserRef.current = true;
+        setOlderHistoryAnchor({
+          scrollHeight: previousHeight,
+          scrollTop: previousTop,
+          messageCount: mergedMessages.length,
+          virtual: useVirtualScroll,
+          settled: false,
+          generation,
+          ...(virtualAnchor ??
+            (anchorRow
+              ? {
+                  rowKey: anchorRow.dataset.messageRowKey,
+                  rowTop: anchorRow.getBoundingClientRect().top,
+                }
+              : {})),
+        });
         try {
           await onLoadOlderHistory(force ? { force: true } : undefined);
-          setOlderHistoryAnchor({
-            scrollHeight: previousHeight,
-            scrollTop: previousTop,
-          });
+          if (generation === olderHistoryLoadGeneration.current) {
+            setOlderHistoryAnchor((anchor) =>
+              anchor?.generation === generation
+                ? { ...anchor, settled: true }
+                : anchor,
+            );
+          }
         } catch {
-          olderHistoryRetryBlocked.current = true;
-          olderHistoryLoadInFlight.current = false;
+          if (generation === olderHistoryLoadGeneration.current) {
+            olderHistoryRetryBlocked.current = true;
+            olderHistoryLoadInFlight.current = false;
+            setOlderHistoryAnchor(null);
+          }
         } finally {
-          setSuppressOlderHistoryLoadingStatus(false);
+          if (generation === olderHistoryLoadGeneration.current) {
+            setSuppressOlderHistoryLoadingStatus(false);
+          }
         }
       },
-      [loadingOlderHistory, onLoadOlderHistory, historyPaginationError],
+      [
+        loadingOlderHistory,
+        onLoadOlderHistory,
+        historyPaginationError,
+        getItemKey,
+        hasVisibleRowKey,
+        headerOffset,
+        mergedMessages.length,
+        useVirtualScroll,
+      ],
     );
 
     const retryOlderHistory = useCallback(() => {
       void loadOlderHistory(true, true);
     }, [loadOlderHistory]);
+
+    useEffect(() => {
+      const pendingGeneration = pendingOlderHistoryTopLoad.current;
+      if (
+        pendingGeneration === undefined ||
+        loadingOlderHistory ||
+        olderHistoryAnchor ||
+        olderHistoryLoadInFlight.current
+      ) {
+        return;
+      }
+      pendingOlderHistoryTopLoad.current = undefined;
+      if (
+        !hasOlderHistory ||
+        pendingGeneration !== olderHistoryLoadGeneration.current
+      ) {
+        return;
+      }
+      const el = getScrollElement();
+      if (el && el.scrollTop <= LOAD_OLDER_HISTORY_THRESHOLD_PX) {
+        void loadOlderHistory(true);
+      }
+    }, [
+      getScrollElement,
+      hasOlderHistory,
+      loadOlderHistory,
+      loadingOlderHistory,
+      olderHistoryAnchor,
+    ]);
 
     // Rules 2 & 3: detect scroll direction to toggle follow mode.
     // Runs synchronously in the scroll handler — no rAF needed since
@@ -3255,7 +4100,8 @@ export const MessageList = memo(
       if (hasOlderHistory && curr <= LOAD_OLDER_HISTORY_THRESHOLD_PX) {
         void loadOlderHistory(true);
       }
-      if (scrollCooldown.current) {
+      const hasUserScrollIntent = Date.now() <= userScrollIntentUntil.current;
+      if (scrollCooldown.current && !hasUserScrollIntent) {
         lastScrollTop.current = curr;
         return;
       }
@@ -3270,14 +4116,13 @@ export const MessageList = memo(
         // Container resizes can clamp scrollTop downward while the viewport is
         // still at the tail. Treat that as follow mode, not a manual scroll-up.
         const isNearBottom = distanceFromBottom < FOLLOW_BOTTOM_THRESHOLD_PX;
-        const hasUserScrollIntent = Date.now() <= userScrollIntentUntil.current;
-        if (isNearBottom) {
-          followPausedByUserRef.current = false;
-          setShouldFollow(true);
-        } else if (hasUserScrollIntent) {
+        if (hasUserScrollIntent) {
           cancelTranscriptReload();
           followPausedByUserRef.current = true;
           setShouldFollow(false);
+        } else if (isNearBottom) {
+          followPausedByUserRef.current = false;
+          setShouldFollow(true);
         } else if (!followPausedByUserRef.current) {
           cancelTranscriptReload();
           setShouldFollow(false);
@@ -3355,22 +4200,32 @@ export const MessageList = memo(
     useEffect(() => {
       const el = getScrollElement();
       if (!el) return;
-      const retryOlderHistoryAtTop = () => {
-        if (
-          olderHistoryRetryBlocked.current &&
-          el.scrollTop <= LOAD_OLDER_HISTORY_THRESHOLD_PX
-        ) {
-          void loadOlderHistory(true);
+      const loadOlderHistoryAtTop = () => {
+        olderHistoryTopCheckFrame.current = undefined;
+        if (el.scrollTop > LOAD_OLDER_HISTORY_THRESHOLD_PX) return;
+        if (loadingOlderHistory || olderHistoryLoadInFlight.current) {
+          pendingOlderHistoryTopLoad.current =
+            olderHistoryLoadGeneration.current;
+          return;
         }
+        void loadOlderHistory(true);
+      };
+      const scheduleOlderHistoryTopCheck = () => {
+        if (olderHistoryTopCheckFrame.current !== undefined) {
+          cancelAnimationFrame(olderHistoryTopCheckFrame.current);
+        }
+        olderHistoryTopCheckFrame.current = requestAnimationFrame(
+          loadOlderHistoryAtTop,
+        );
       };
       const markFromWheel = (event: WheelEvent) => {
         markUserScrollIntent();
-        if (event.deltaY < 0) retryOlderHistoryAtTop();
+        if (event.deltaY < 0) scheduleOlderHistoryTopCheck();
       };
       const markFromTouch = () => {
         markUserScrollIntent();
-        retryOlderHistoryAtTop();
       };
+      const markFromTouchMove = () => scheduleOlderHistoryTopCheck();
       const markFromPointer = (event: PointerEvent) => {
         const rect = el.getBoundingClientRect();
         const scrollbarEdge = 20;
@@ -3397,7 +4252,7 @@ export const MessageList = memo(
             event.key === 'PageUp' ||
             event.key === 'Home'
           ) {
-            retryOlderHistoryAtTop();
+            scheduleOlderHistoryTopCheck();
           }
         }
       };
@@ -3405,15 +4260,26 @@ export const MessageList = memo(
       el.addEventListener('touchstart', markFromTouch, {
         passive: true,
       });
+      el.addEventListener('touchmove', markFromTouchMove, { passive: true });
       el.addEventListener('pointerdown', markFromPointer, { passive: true });
       el.addEventListener('keydown', markFromKey, { passive: true });
       return () => {
         el.removeEventListener('wheel', markFromWheel);
         el.removeEventListener('touchstart', markFromTouch);
+        el.removeEventListener('touchmove', markFromTouchMove);
         el.removeEventListener('pointerdown', markFromPointer);
         el.removeEventListener('keydown', markFromKey);
+        if (olderHistoryTopCheckFrame.current !== undefined) {
+          cancelAnimationFrame(olderHistoryTopCheckFrame.current);
+          olderHistoryTopCheckFrame.current = undefined;
+        }
       };
-    }, [getScrollElement, loadOlderHistory, markUserScrollIntent]);
+    }, [
+      getScrollElement,
+      loadOlderHistory,
+      loadingOlderHistory,
+      markUserScrollIntent,
+    ]);
 
     useEffect(() => {
       const el = getScrollElement();
@@ -3421,6 +4287,9 @@ export const MessageList = memo(
       const observer = new ResizeObserver(() => {
         scheduleScrollOverflowReport();
         loadOlderHistoryIfUnderfilled();
+        if (catchingUpRef.current || followPausedByUserRef.current) return;
+        setShouldFollow(true);
+        scrollToBottom();
       });
       observer.observe(el);
       for (const child of Array.from(el.children)) {
@@ -3447,6 +4316,8 @@ export const MessageList = memo(
       getScrollElement,
       loadOlderHistoryIfUnderfilled,
       scheduleScrollOverflowReport,
+      scrollToBottom,
+      setShouldFollow,
     ]);
 
     // Clear screen (e.g. /clear) → reset to follow mode, drop stale per-turn
@@ -3455,6 +4326,7 @@ export const MessageList = memo(
     useEffect(() => {
       if (messages.length === 0) {
         followPausedByUserRef.current = false;
+        pendingBottomFollowAfterCooldown.current = false;
         setShouldFollow(true);
         pendingScrollRef.current = null;
         setCollapseOverrides((prev) => (prev.size ? new Map() : prev));
@@ -3660,6 +4532,34 @@ export const MessageList = memo(
                 >
                   <ParallelAgentsGroup
                     agents={displayItem.agents}
+                    autoManageExpansion={
+                      transcriptRenderMode === 'interactive' && !catchingUp
+                    }
+                    automaticCollapseDelayMs={
+                      backgroundSummaryAgentContext.key === displayItem.key &&
+                      !latestTurnAwaitsAgentSummary
+                        ? AGENT_SUMMARY_COLLAPSE_DELAY_MS
+                        : undefined
+                    }
+                    deferAutomaticCollapse={
+                      (latestTurnParallelAgentKeys.has(displayItem.key) &&
+                        isResponding &&
+                        (!backgroundSummaryAgentContext.latestBackgroundNotificationInLatestTurn ||
+                          (backgroundSummaryAgentContext.agentNotificationIsLatestBackground &&
+                            latestTurnAwaitsAgentSummary))) ||
+                      (backgroundSummaryAgentContext.key === displayItem.key &&
+                        latestTurnAwaitsAgentSummary)
+                    }
+                    expandActiveWhenLive={
+                      isResponding &&
+                      latestTurnParallelAgentKeys.has(displayItem.key)
+                    }
+                    onAutomaticExpansionChange={(expanded) =>
+                      handleAutomaticAgentExpansionChange(
+                        displayItem.key,
+                        expanded,
+                      )
+                    }
                     pendingApproval={pendingApproval}
                   />
                 </div>
@@ -3722,6 +4622,7 @@ export const MessageList = memo(
               message={displayItem.message}
               pendingApproval={pendingApproval}
               onShowContextDetail={onShowContextDetail}
+              onImagePreview={onImagePreview}
               workspaceCwd={workspaceCwd}
               isLatest={isLatest}
               showRetryHint={showRetryHint}
@@ -3771,7 +4672,15 @@ export const MessageList = memo(
         tailContent,
         tailContentIndex,
         pendingApproval,
+        catchingUp,
+        isResponding,
+        latestTurnAwaitsAgentSummary,
+        latestTurnParallelAgentKeys,
+        backgroundSummaryAgentContext,
+        transcriptRenderMode,
+        handleAutomaticAgentExpansionChange,
         onShowContextDetail,
+        onImagePreview,
         generateContent,
         headerOffset,
         visibleItems,
@@ -3813,7 +4722,12 @@ export const MessageList = memo(
     useLayoutEffect(() => {
       if (catchingUp) return;
       const isNewUserMessage = pendingNewUserSmoothScroll.current;
-      if (scrollCooldown.current && !isNewUserMessage) return;
+      if (scrollCooldown.current && !isNewUserMessage) {
+        if (!followPausedByUserRef.current) {
+          pendingBottomFollowAfterCooldown.current = true;
+        }
+        return;
+      }
       // Preserve the new-prompt scroll even if a previous disclosure resize is
       // still settling; it targets the latest virtualizer size from this render.
       if (pendingFollowRecheck.current && !isNewUserMessage) return;
@@ -3892,17 +4806,12 @@ export const MessageList = memo(
           onSelect={scrollToMessage}
         />
         {useVirtualScroll ? (
-          <div
-            className={styles.virtualSizer}
-            style={{
-              height: totalVirtualSize,
-            }}
-          >
+          <div ref={virtualizer.containerRef} className={styles.virtualSizer}>
             {virtualItems.map((virtualRow) => (
               <div
                 key={virtualRow.key}
                 data-index={virtualRow.index}
-                ref={virtualizer.measureElement}
+                ref={measureVirtualRow}
                 className={joinClassNames(
                   styles.virtualRow,
                   getRowClassName(
@@ -3916,7 +4825,6 @@ export const MessageList = memo(
                   top: 0,
                   left: 0,
                   right: 0,
-                  transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
                 {renderVirtualItem(virtualRow.index)}

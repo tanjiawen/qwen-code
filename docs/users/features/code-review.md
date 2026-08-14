@@ -183,7 +183,7 @@ Or, after running `/review 123`, type `post comments` to publish findings withou
 - Where the fix is a single localized edit, a ` ```suggestion ` block you can apply in one click
 - For Approve/Request changes verdicts: a review summary with the verdict
 - For Comment verdict with all inline comments posted: no separate summary (inline comments are sufficient)
-- Model and CLI version attribution footer on each comment (e.g., _— qwen3-coder via Qwen Code /review (v0.21.2)_)
+- Model and CLI version attribution footer on each comment (e.g., _— qwen3-coder via Qwen Code /review (v0.21.2)_); set `review.attribution` to `false` in your user or system `settings.json` (the workspace `.qwen/settings.json` is ignored for `review.*` settings) to post without it
 
 **What stays terminal-only:**
 
@@ -386,6 +386,8 @@ The exit code is the contract a gate should read:
 `3` (not `2`) lets a gate distinguish "the review is blocking" from "the tool broke" — yargs already uses `1` for usage errors — without parsing any output. `--timeout-minutes` (default 120, floored at 1) terminates a hung review and exits `1`, and cancelling the command (Ctrl+C / SIGTERM) terminates the review's process group rather than orphaning it.
 
 A time-budgeted run can also export a **soft** deadline so the review stops its open-ended reverse-audit loop while there is still time to verify, compose and post: `QWEN_REVIEW_DEADLINE_EPOCH` is the Unix-seconds moment the run will be killed, and `QWEN_REVIEW_DEADLINE_RESERVE_SECONDS` (default 3600; `0` keeps only the round estimate) is the tail that must remain for the last round's verification, `compose-review` and submission. When the remaining budget no longer fits another round plus that tail, the round builder refuses to build it, and the composed verdict discloses the truncated audit (an otherwise-Approve verdict is capped at Comment). A missing or malformed deadline leaves the review ungated — the outer timeout still bounds the run.
+
+Nested inside that reserve is a smaller **compose floor**, `QWEN_REVIEW_DEADLINE_COMPOSE_FLOOR_SECONDS` (default 1200; `0` disables this gate entirely, at every point including past the deadline). The reserve is one number covering "verify the last round **plus** compose **plus** submit", which fits a normal per-finding re-trace but not a security review whose verification re-runs real filesystem/git workloads without bound. So the verifier — not the round builder — is gated on this floor: once the floor or less remains, `agent-prompt --role verify` refuses to build (a `VERIFY BUDGET:` line, exit **4**), the findings in hand keep their unverified tag (which caps the verdict), and `compose-review` and submission run. The floor is strictly below the reserve, so a healthy run hits the reverse-audit gate first and never reaches it; it is the cover for the one span the reserve cannot bound.
 
 ## Cross-file Impact Analysis
 
